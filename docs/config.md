@@ -38,6 +38,8 @@ text - it is never run.
 | Key | Type | Default | Used by |
 |---|---|---|---|
 | `RAM_ALERT_PCT` | percentage (0-100) | 90 | `info` |
+| `CUSTOM_MODULES_ENABLED` | boolean | false | `info` (custom modules - see `docs/modules.md`) |
+| `CUSTOM_MODULE_TIMEOUT_DEFAULT` | positive_integer | 5 | `info` (custom modules - see `docs/modules.md`) |
 
 More settings (dashboard sections, refresh interval, top-N process
 count, log lookback, etc.) will be wired up in future sprints - this
