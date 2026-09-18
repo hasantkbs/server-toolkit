@@ -2869,6 +2869,50 @@ else
     bad "found lingering ping/ss process(es): $net_leftover"
 fi
 
+echo "== configuration engine: path resolution =="
+default_path="$(env -u TOOLKIT_CONFIG_DIR -u XDG_CONFIG_HOME bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_path
+')"
+if [[ "$default_path" == "${HOME}/.config/server-toolkit/config" ]]; then
+    ok "config_path defaults to \$HOME/.config/server-toolkit/config"
+else
+    bad "config_path default was '$default_path', expected '${HOME}/.config/server-toolkit/config'"
+fi
+
+override_path="$(TOOLKIT_CONFIG_DIR=/tmp/toolkit-config-override-test bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_path
+')"
+if [[ "$override_path" == "/tmp/toolkit-config-override-test/config" ]]; then
+    ok "TOOLKIT_CONFIG_DIR overrides config_path"
+else
+    bad "TOOLKIT_CONFIG_DIR override did not take effect (got '$override_path')"
+fi
+
+echo "== configuration engine: validators =="
+run_validator() {
+    bash -c '
+        source "'"${LIB_DIR}"'/config.sh"
+        config_validate "'"$1"'" "'"$2"'" "'"${3:-}"'"
+    '
+}
+run_validator "42" "integer" && ok "config_validate: 42 is a valid integer" || bad "config_validate: 42 rejected as integer"
+run_validator "-3" "integer" && ok "config_validate: -3 is a valid integer" || bad "config_validate: -3 rejected as integer"
+run_validator "abc" "integer" && bad "config_validate: 'abc' wrongly accepted as integer" || ok "config_validate: 'abc' rejected as integer"
+run_validator "5" "positive_integer" && ok "config_validate: 5 is a valid positive_integer" || bad "config_validate: 5 rejected as positive_integer"
+run_validator "0" "positive_integer" && bad "config_validate: 0 wrongly accepted as positive_integer" || ok "config_validate: 0 rejected as positive_integer"
+run_validator "80" "percentage" && ok "config_validate: 80 is a valid percentage" || bad "config_validate: 80 rejected as percentage"
+run_validator "150" "percentage" && bad "config_validate: 150 wrongly accepted as percentage" || ok "config_validate: 150 rejected as percentage"
+run_validator "-1" "percentage" && bad "config_validate: -1 wrongly accepted as percentage" || ok "config_validate: -1 rejected as percentage"
+run_validator "true" "boolean" && ok "config_validate: 'true' is a valid boolean" || bad "config_validate: 'true' rejected as boolean"
+run_validator "false" "boolean" && ok "config_validate: 'false' is a valid boolean" || bad "config_validate: 'false' rejected as boolean"
+run_validator "maybe" "boolean" && bad "config_validate: 'maybe' wrongly accepted as boolean" || ok "config_validate: 'maybe' rejected as boolean"
+run_validator "yellow" "enum" "red|green|blue" && bad "config_validate: 'yellow' wrongly accepted by enum red|green|blue" || ok "config_validate: 'yellow' rejected by enum red|green|blue"
+run_validator "green" "enum" "red|green|blue" && ok "config_validate: 'green' accepted by enum red|green|blue" || bad "config_validate: 'green' rejected by enum red|green|blue"
+run_validator "hello" "string" && ok "config_validate: non-empty string accepted" || bad "config_validate: non-empty string rejected"
+run_validator "" "string" && bad "config_validate: empty string wrongly accepted" || ok "config_validate: empty string rejected"
+
 echo
 echo "Results: ${pass} passed, ${fail} failed"
 [[ "$fail" -eq 0 ]]
