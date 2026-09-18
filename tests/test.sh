@@ -2913,6 +2913,195 @@ run_validator "green" "enum" "red|green|blue" && ok "config_validate: 'green' ac
 run_validator "hello" "string" && ok "config_validate: non-empty string accepted" || bad "config_validate: non-empty string rejected"
 run_validator "" "string" && bad "config_validate: empty string wrongly accepted" || ok "config_validate: empty string rejected"
 
+echo "== configuration engine: absent config uses defaults =="
+CFG_TMP="$(mktemp -d)"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/nope" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+')"
+[[ "$result" == "90" ]] && ok "config_get returns the default (90) when no config file exists" \
+    || bad "config_get did not fall back to default with no config file (got '$result')"
+
+echo "== configuration engine: default behavior is identical whether TOOLKIT_CONFIG_DIR is unset or points nowhere =="
+result_unset="$(env -u TOOLKIT_CONFIG_DIR bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+')"
+result_missing_dir="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/still-does-not-exist" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+')"
+if [[ "$result_unset" == "90" && "$result_missing_dir" == "90" ]]; then
+    ok "config_get's default behavior is identical with TOOLKIT_CONFIG_DIR unset vs. pointing at a missing directory"
+else
+    bad "default behavior differs (unset='$result_unset', missing dir='$result_missing_dir')"
+fi
+
+echo "== configuration engine: valid config overrides default =="
+mkdir -p "${CFG_TMP}/valid"
+printf 'CONFIG_VERSION=1\nRAM_ALERT_PCT=80\n' > "${CFG_TMP}/valid/config"
+chmod 600 "${CFG_TMP}/valid/config"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/valid" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+')"
+[[ "$result" == "80" ]] && ok "config_get returns the configured value (80) when the config sets it" \
+    || bad "config_get did not pick up a valid config value (got '$result')"
+
+echo "== configuration engine: invalid integer falls back to default with a warning =="
+mkdir -p "${CFG_TMP}/badint"
+printf 'TOP_N=notanumber\n' > "${CFG_TMP}/badint/config"
+chmod 600 "${CFG_TMP}/badint/config"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/badint" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get TOP_N 5 positive_integer
+' 2>"${CFG_TMP}/badint.err")"
+if [[ "$result" == "5" ]] && grep -qi "invalid" "${CFG_TMP}/badint.err"; then
+    ok "config_get falls back to default and warns on an invalid integer"
+else
+    bad "config_get did not handle an invalid integer correctly (got '$result', stderr: $(cat "${CFG_TMP}/badint.err"))"
+fi
+
+echo "== configuration engine: invalid percentage falls back to default =="
+mkdir -p "${CFG_TMP}/badpct"
+printf 'RAM_ALERT_PCT=150\n' > "${CFG_TMP}/badpct/config"
+chmod 600 "${CFG_TMP}/badpct/config"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/badpct" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+' 2>/dev/null)"
+[[ "$result" == "90" ]] && ok "config_get rejects an out-of-range percentage and uses the default" \
+    || bad "config_get accepted an invalid percentage (got '$result')"
+
+echo "== configuration engine: invalid boolean falls back to default =="
+mkdir -p "${CFG_TMP}/badbool"
+printf 'SOME_FLAG=maybe\n' > "${CFG_TMP}/badbool/config"
+chmod 600 "${CFG_TMP}/badbool/config"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/badbool" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get SOME_FLAG false boolean
+' 2>/dev/null)"
+[[ "$result" == "false" ]] && ok "config_get rejects an invalid boolean and uses the default" \
+    || bad "config_get accepted an invalid boolean (got '$result')"
+
+echo "== configuration engine: unknown key is ignored, known keys still load =="
+mkdir -p "${CFG_TMP}/unknown"
+printf 'SOME_TOTALLY_UNKNOWN_SETTING=123\nRAM_ALERT_PCT=75\n' > "${CFG_TMP}/unknown/config"
+chmod 600 "${CFG_TMP}/unknown/config"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/unknown" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+')"
+[[ "$result" == "75" ]] && ok "an unrecognized key does not stop other keys in the same config from loading" \
+    || bad "unknown key handling broke loading of a known key (got '$result')"
+
+echo "== configuration engine: duplicate key uses the last occurrence (deterministic) =="
+mkdir -p "${CFG_TMP}/dup"
+printf 'RAM_ALERT_PCT=60\nRAM_ALERT_PCT=85\n' > "${CFG_TMP}/dup/config"
+chmod 600 "${CFG_TMP}/dup/config"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/dup" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+')"
+[[ "$result" == "85" ]] && ok "duplicate keys resolve deterministically to the last occurrence" \
+    || bad "duplicate key resolution was not last-wins (got '$result')"
+
+echo "== configuration engine: malformed lines are skipped without crashing =="
+mkdir -p "${CFG_TMP}/malformed"
+printf 'this is not valid\n=noKeyHere\n123STARTSWITHDIGIT=1\nRAM_ALERT_PCT=77\n' > "${CFG_TMP}/malformed/config"
+chmod 600 "${CFG_TMP}/malformed/config"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/malformed" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+' 2>/dev/null)"
+[[ "$result" == "77" ]] && ok "malformed lines are skipped, valid lines in the same file still load" \
+    || bad "a malformed config line broke loading of the rest of the file (got '$result')"
+
+echo "== configuration engine: supported config version loads normally =="
+mkdir -p "${CFG_TMP}/goodver"
+printf 'CONFIG_VERSION=1\nRAM_ALERT_PCT=82\n' > "${CFG_TMP}/goodver/config"
+chmod 600 "${CFG_TMP}/goodver/config"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/goodver" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+')"
+[[ "$result" == "82" ]] && ok "a config declaring the supported CONFIG_VERSION loads normally" \
+    || bad "a supported CONFIG_VERSION unexpectedly failed to load (got '$result')"
+
+echo "== configuration engine: unsupported config version is ignored entirely =="
+mkdir -p "${CFG_TMP}/badver"
+printf 'CONFIG_VERSION=99\nRAM_ALERT_PCT=82\n' > "${CFG_TMP}/badver/config"
+chmod 600 "${CFG_TMP}/badver/config"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/badver" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+' 2>"${CFG_TMP}/badver.err")"
+if [[ "$result" == "90" ]] && grep -qi "version" "${CFG_TMP}/badver.err"; then
+    ok "an unsupported CONFIG_VERSION causes the whole config to be ignored, with a clear warning"
+else
+    bad "unsupported CONFIG_VERSION was not handled safely (got '$result', stderr: $(cat "${CFG_TMP}/badver.err"))"
+fi
+
+echo "== configuration engine: unreadable config falls back to defaults =="
+mkdir -p "${CFG_TMP}/unreadable"
+printf 'RAM_ALERT_PCT=77\n' > "${CFG_TMP}/unreadable/config"
+chmod 000 "${CFG_TMP}/unreadable/config"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/unreadable" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+' 2>"${CFG_TMP}/unreadable.err")"
+if [[ "$result" == "90" ]] && [[ -s "${CFG_TMP}/unreadable.err" ]]; then
+    ok "an unreadable config file falls back to defaults with a clear message"
+else
+    bad "unreadable config was not handled safely (got '$result')"
+fi
+chmod 700 "${CFG_TMP}/unreadable/config"
+
+echo "== configuration engine: world/group-writable config is rejected =="
+mkdir -p "${CFG_TMP}/unsafe"
+printf 'RAM_ALERT_PCT=77\n' > "${CFG_TMP}/unsafe/config"
+chmod 666 "${CFG_TMP}/unsafe/config"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/unsafe" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+' 2>"${CFG_TMP}/unsafe.err")"
+if [[ "$result" == "90" ]] && grep -qi "writable" "${CFG_TMP}/unsafe.err"; then
+    ok "a world/group-writable config is rejected in favor of defaults"
+else
+    bad "an unsafe-permission config was not rejected (got '$result', stderr: $(cat "${CFG_TMP}/unsafe.err"))"
+fi
+chmod 600 "${CFG_TMP}/unsafe/config"
+
+echo "== configuration engine: injected shell payloads are never executed =="
+rm -f /tmp/config-pwned /tmp/config-pwned-backtick /tmp/config-pwned-semicolon
+mkdir -p "${CFG_TMP}/injection"
+cat > "${CFG_TMP}/injection/config" <<'EOF'
+EVIL_SUBSHELL=$(touch /tmp/config-pwned)
+EVIL_BACKTICK=`touch /tmp/config-pwned-backtick`
+RAM_ALERT_PCT=90; touch /tmp/config-pwned-semicolon
+EOF
+chmod 600 "${CFG_TMP}/injection/config"
+literal="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/injection" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get EVIL_SUBSHELL "" string
+' 2>/dev/null)"
+TOOLKIT_CONFIG_DIR="${CFG_TMP}/injection" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+' >/dev/null 2>&1
+if [[ ! -e /tmp/config-pwned && ! -e /tmp/config-pwned-backtick && ! -e /tmp/config-pwned-semicolon ]]; then
+    ok "config loader never executes shell payloads embedded in values (\$(), backticks, ;)"
+else
+    bad "SECURITY: a config value was executed as a shell command (found: $(ls /tmp/config-pwned* 2>/dev/null))"
+fi
+if [[ "$literal" == '$(touch /tmp/config-pwned)' ]]; then
+    ok "a \$(...) payload is stored and returned as inert literal text, not executed"
+else
+    bad "a \$(...) payload was not preserved as literal text (got '$literal')"
+fi
+rm -f /tmp/config-pwned /tmp/config-pwned-backtick /tmp/config-pwned-semicolon
+rm -rf "$CFG_TMP"
+
 echo
 echo "Results: ${pass} passed, ${fail} failed"
 [[ "$fail" -eq 0 ]]

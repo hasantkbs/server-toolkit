@@ -95,3 +95,109 @@ config_validate() {
         *) return 1 ;;
     esac
 }
+
+# -------------------------------------------------------------- loading ---
+
+# shellcheck disable=SC2034 # written here, read via config_get below
+declare -gA CONFIG=()
+CONFIG_LOADED=0
+
+# Parses one "KEY=VALUE" line. Prints "KEY<TAB>VALUE" and returns success
+# for a recognizable line; returns failure (prints nothing) for a blank
+# line, a comment, or anything that doesn't match the KEY=VALUE shape -
+# callers skip those rather than treating them as an error, so one
+# malformed line never breaks the rest of the file. Pure string
+# extraction: VALUE is never evaluated, expanded, or executed.
+_config_parse_line() {
+    local line="$1" key value
+    [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && return 1
+    [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || return 1
+    key="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]}"
+    if [[ "$value" == \"*\" && "${#value}" -ge 2 ]]; then
+        value="${value:1:-1}"
+    elif [[ "$value" == \'*\' && "${#value}" -ge 2 ]]; then
+        value="${value:1:-1}"
+    fi
+    printf '%s\t%s\n' "$key" "$value"
+}
+
+# A config file is only trusted if it's owned by the user running the
+# toolkit and isn't writable by group or other - the same principle as a
+# tool refusing a world-writable known_hosts/config. Follows symlinks
+# (via -L) so a "safe-looking" symlink can't point at someone else's file.
+_config_permissions_safe() {
+    local path="$1" owner mode
+    read -r owner mode < <(stat -L -c '%u %a' -- "$path" 2>/dev/null) || return 1
+    [[ "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    [[ "$owner" == "$(id -u)" ]] || return 1
+    local group_bit="${mode: -2:1}" other_bit="${mode: -1}"
+    (( (group_bit & 2) == 0 )) || return 1
+    (( (other_bit & 2) == 0 )) || return 1
+    return 0
+}
+
+# Populates the CONFIG associative array from the resolved config path.
+# Idempotent per-process (a no-op after the first call) so repeated
+# config_get calls don't re-read the file. Never fails the caller: on any
+# problem (missing file, unsafe permissions, unreadable, unsupported
+# version) it just leaves CONFIG empty and returns 0, so config_get's
+# default-fallback path takes over uniformly for every key.
+load_config() {
+    [[ "$CONFIG_LOADED" -eq 1 ]] && return 0
+    CONFIG_LOADED=1
+
+    local path
+    path="$(config_path)"
+    [[ -f "$path" ]] || return 0
+
+    if ! _config_permissions_safe "$path"; then
+        printf 'server-toolkit: config at %s is not owned by you or is writable by others - ignoring it and using defaults\n' "$path" >&2
+        return 0
+    fi
+
+    local content
+    if ! content="$(cat -- "$path" 2>/dev/null)"; then
+        printf 'server-toolkit: config at %s could not be read - using defaults\n' "$path" >&2
+        return 0
+    fi
+
+    local line parsed key value version_seen=""
+    while IFS= read -r line; do
+        parsed="$(_config_parse_line "$line")" || continue
+        key="${parsed%%$'\t'*}"
+        value="${parsed#*$'\t'}"
+        [[ "$key" == "CONFIG_VERSION" ]] && version_seen="$value"
+        CONFIG["$key"]="$value"
+    done <<<"$content"
+
+    if [[ -n "$version_seen" ]] && [[ "$version_seen" != "$CONFIG_SUPPORTED_VERSION" ]]; then
+        printf 'server-toolkit: config declares CONFIG_VERSION=%s, this build supports %s - ignoring config and using defaults\n' \
+            "$version_seen" "$CONFIG_SUPPORTED_VERSION" >&2
+        CONFIG=()
+    fi
+}
+
+# Looks up KEY, falling back to DEFAULT when the key is absent, empty, or
+# fails validation for TYPE (default "string"). ENUM is the
+# pipe-separated allowed-value list, used only when TYPE is "enum".
+# Loads the config on first call; every bin/* entry point is expected to
+# call this rather than reading the CONFIG array directly.
+config_get() {
+    local key="$1" default="$2" type="${3:-string}" enum="${4:-}"
+    load_config
+
+    local value="${CONFIG[$key]:-}"
+    if [[ -z "$value" ]]; then
+        printf '%s' "$default"
+        return
+    fi
+
+    if config_validate "$value" "$type" "$enum"; then
+        printf '%s' "$value"
+    else
+        printf 'server-toolkit: config key %s=%q is invalid for type "%s" - using default %q\n' \
+            "$key" "$value" "$type" "$default" >&2
+        printf '%s' "$default"
+    fi
+}
