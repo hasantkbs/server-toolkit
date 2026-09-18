@@ -3315,6 +3315,7 @@ run_name_check ".." && bad "module_name_valid wrongly accepted '..'" || ok "modu
 run_name_check "../evil" && bad "module_name_valid wrongly accepted '../evil'" || ok "module_name_valid rejects '../evil'"
 run_name_check "a/b" && bad "module_name_valid wrongly accepted 'a/b'" || ok "module_name_valid rejects 'a/b'"
 run_name_check 'a\b' && bad "module_name_valid wrongly accepted 'a\\b'" || ok "module_name_valid rejects 'a\\b'"
+run_name_check "" && bad "module_name_valid wrongly accepted an empty name" || ok "module_name_valid rejects an empty name"
 run_name_check "valid-name_123" && ok "module_name_valid accepts a normal name" || bad "module_name_valid wrongly rejected a normal name"
 
 echo "== custom modules: malformed module definition does not crash discovery/reading =="
