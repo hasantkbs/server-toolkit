@@ -54,9 +54,13 @@ quoting, and single-line-values-only all apply identically).
 | `COMMAND` | string | yes (to do anything) | — | The shell command to run. See Trust model below. |
 | `TIMEOUT` | positive_integer (seconds) | no | `CUSTOM_MODULE_TIMEOUT_DEFAULT` (see `docs/config.md`, default 5) | How long this module is allowed to run before being killed. |
 
-A module with no `COMMAND` (or an invalid `TIMEOUT`) is reported as a
-problem in the dashboard rather than silently ignored or crashing the
-rest of `info`.
+A module with no `COMMAND` is reported as a problem in the dashboard
+(WARN, see Result mapping below) rather than silently ignored or
+crashing the rest of `info`. An invalid `TIMEOUT` is different: it's
+silently replaced with `CUSTOM_MODULE_TIMEOUT_DEFAULT` and the module
+runs anyway — there's no warning or indication that the value you wrote
+was ignored, so double-check it if the module doesn't seem to be timing
+out when you expect.
 
 ### Example (synthetic — adapt the command to your own system)
 
@@ -107,8 +111,14 @@ of `info` uses, based on the exit code of `timeout ... bash -c
   alert. A verbose module that exits 0 but writes more than the 4096-byte
   output cap still reports OK — the cap only truncates what's displayed,
   it never turns success into a warning.
-- Disabled, unknown, or malformed (no `COMMAND`) → reported inline, no
-  alert, nothing is ever executed.
+- Disabled (`ENABLED` not `true`), or unknown (invalid module name, or
+  the module file doesn't exist / isn't readable) → reported inline,
+  no alert, nothing is ever executed.
+- Malformed (no `COMMAND` configured) → also WARN, with an alert, same
+  as any other module that reports WARN — `info`'s alert dispatch fires
+  on the WARN/ERROR status alone, with no exemption for *why* a module
+  produced it. Nothing is executed in this case (there's no command to
+  run), but it is not silent.
 
 A module doesn't need to know about this vocabulary at all — just exit
 0 when things are fine and non-zero when they aren't, the same
