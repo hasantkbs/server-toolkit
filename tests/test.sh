@@ -304,13 +304,13 @@ fi
 rm -rf "$MOCK_DIR"
 
 echo "== storage-info reads real data without modifying it =="
-CANARY_BEFORE="$(stat -c '%Y' /home/<user> 2>/dev/null)"
+CANARY_BEFORE="$(stat -c '%Y' "$HOME" 2>/dev/null)"
 "${BIN_DIR}/storage-info" >/dev/null 2>&1 || true
-CANARY_AFTER="$(stat -c '%Y' /home/<user> 2>/dev/null)"
+CANARY_AFTER="$(stat -c '%Y' "$HOME" 2>/dev/null)"
 if [[ "$CANARY_BEFORE" == "$CANARY_AFTER" ]]; then
-    ok "running storage-info did not change /home/<user>'s mtime"
+    ok "running storage-info did not change \$HOME's mtime"
 else
-    bad "/home/<user>'s mtime changed after running storage-info ($CANARY_BEFORE -> $CANARY_AFTER)"
+    bad "\$HOME's mtime changed after running storage-info ($CANARY_BEFORE -> $CANARY_AFTER)"
 fi
 if ! grep -qE '\brm\b|\btruncate\b|docker (system|builder) prune|docker (rm|rmi|stop|kill|restart)' \
     "${TOOLKIT_DIR}/lib/storage.sh" "${BIN_DIR}/storage-info"; then
