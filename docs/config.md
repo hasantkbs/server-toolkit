@@ -24,6 +24,11 @@ Plain `KEY=VALUE` lines, one setting per line. Lines starting with `#`
 ignored. A value may optionally be wrapped in matching single or double
 quotes, which are stripped.
 
+Values are single-line only: an unterminated quote does not continue onto
+the next line. Each line is parsed independently, so `FOO="bar` on one
+line followed by `KEY2=value` on the next produces two keys, not one
+merged multi-line value.
+
 The parser never `source`s, `eval`s, or otherwise executes this file. A
 value like `FOO=$(rm -rf /)` is stored and read back as that literal
 text - it is never run.
