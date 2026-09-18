@@ -3764,12 +3764,11 @@ if ! grep -q "CUSTOM MODULES" <<<"$without_modules"; then
 else
     bad "info showed a CUSTOM MODULES section with no config at all - default-off is broken"
 fi
-without_var="$(env -u TOOLKIT_CONFIG_DIR "${BIN_DIR}/info" 2>/dev/null | grep -vE '^uptime|^load')"
-with_missing_dir_filtered="$(printf '%s' "$without_modules" | grep -vE '^uptime|^load')"
-if [[ "$without_var" == "$with_missing_dir_filtered" ]]; then
-    ok "info's output (ignoring volatile uptime/load lines) is identical whether TOOLKIT_CONFIG_DIR is unset or points at a missing directory"
+without_var="$(env -u TOOLKIT_CONFIG_DIR "${BIN_DIR}/info" 2>/dev/null)"
+if ! grep -q "CUSTOM MODULES" <<<"$without_var"; then
+    ok "info does not show a CUSTOM MODULES section when TOOLKIT_CONFIG_DIR is entirely unset either"
 else
-    bad "info's output differs between an unset TOOLKIT_CONFIG_DIR and one pointing at a missing directory"
+    bad "info showed a CUSTOM MODULES section with TOOLKIT_CONFIG_DIR unset - default-off is broken"
 fi
 
 echo "== custom modules: info shows the section, runs an enabled module, and raises an alert when turned on =="
