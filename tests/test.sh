@@ -3754,6 +3754,22 @@ else
     bad "a SIGTERM-ignoring module was not killed promptly (elapsed ${elapsed}s, result: '$result')"
 fi
 
+echo "== custom modules: run_module called directly (not via command substitution) survives a non-zero-exiting module under set -e =="
+mkdir -p "${MOD_TMP4}/errexit/modules"
+printf 'ENABLED=true\nCOMMAND=exit 3\n' > "${MOD_TMP4}/errexit/modules/failer.conf"
+chmod 600 "${MOD_TMP4}/errexit/modules/failer.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP4}/errexit" bash -c '
+    set -euo pipefail
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module failer
+    echo survived
+' 2>&1)"
+[[ "$result" == *"survived"* ]] && ok "run_module called directly under set -e survives a module that exits non-zero" \
+    || bad "run_module aborted a set -e caller when called directly (not via \$(...)) with a failing module (result: '$result')"
+
 rm -rf "$MOD_TMP4"
 
 echo "== custom modules: info's default behavior is unchanged when the feature is off =="

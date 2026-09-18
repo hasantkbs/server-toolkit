@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# modules.sh - discovery and safe reading of user-defined custom
-# diagnostic modules (part of server-toolkit's Sprint 12 custom-module
-# system). Execution lives in run_module() (added in a later change to
-# this same file) - everything in THIS file only ever turns a module's
-# *.conf file into plain strings. Nothing here executes a byte of it.
+# modules.sh - discovery, safe reading, and execution of user-defined
+# custom diagnostic modules (part of server-toolkit's Sprint 12
+# custom-module system). This file contains both halves of the design:
+# discovery/parsing (modules_dir, module_name_valid, discover_modules,
+# read_module_file) never executes a byte of a module - and run_module,
+# the one deliberate site below where a module's COMMAND field is
+# actually run. See the TRUST BOUNDARY block immediately below for the
+# full explanation of where that line is drawn and why.
 #
 # TRUST BOUNDARY - read this before touching this file:
 #   A module's COMMAND field is, by design, eventually run as an
@@ -26,9 +29,12 @@
 MODULE_NAME_RE='^[A-Za-z0-9_-]+$'
 
 # Hard cap (bytes) on a module's captured combined stdout+stderr,
-# enforced in run_module by piping through `head -c` - a real bound on
+# enforced in run_module via `head -c` on read-back - a real bound on
 # what this process ever holds in memory, not a cosmetic display
-# truncation like lib/logs.sh's truncate_text.
+# truncation like lib/logs.sh's truncate_text. On the primary path this
+# reads back a temp file the module's output was redirected into; on
+# the rare mktemp-failure fallback it's a live pipe instead - either
+# way, `head -c` is what actually enforces the cap.
 MODULE_OUTPUT_MAX_BYTES=4096
 
 # Directory holding user-defined module *.conf files. Reuses config.sh's
@@ -174,9 +180,14 @@ module_timeout_default() {
 # isn't bounded in real time the way a live `head -c` pipe would be - a
 # well-behaved-but-verbose module could write more than
 # MODULE_OUTPUT_MAX_BYTES to disk before being read back and truncated
-# here. That's judged acceptable: it's still bounded by TIMEOUT (and
-# available disk), and the module is the user's own configured command,
-# not untrusted input.
+# here. That's a best-effort bound, not an absolute guarantee, under
+# this feature's two-opt-in trust model: TIMEOUT and available disk
+# bound the well-behaved case, but a module that backgrounds a
+# grandchild (the same pattern this whole redesign exists to stop from
+# hanging run_module) can keep that grandchild writing to the now-
+# unlinked temp file for as long as it runs, out of band, after
+# run_module itself has already returned. Accepted here because the
+# module is the user's own configured command, not untrusted input.
 #
 # `-k 1` (kill-after) handles a module that ignores SIGTERM: timeout
 # sends SIGTERM at $timeout_secs, then SIGKILL one second later if the
@@ -241,8 +252,8 @@ run_module() {
         # The module's own stdout/stderr are unaffected (already fully
         # redirected into tmp_out above), so this only silences bash's
         # own notice.
-        { timeout -k 1 "$timeout_secs" bash -c "$command" >"$tmp_out" 2>&1 </dev/null; rc=$?; } 2>/dev/null
-        output="$(head -c "$MODULE_OUTPUT_MAX_BYTES" -- "$tmp_out" 2>/dev/null)"
+        { timeout -k 1 "$timeout_secs" bash -c "$command" >"$tmp_out" 2>&1 </dev/null || rc=$?; } 2>/dev/null
+        { output="$(head -c "$MODULE_OUTPUT_MAX_BYTES" -- "$tmp_out" 2>/dev/null)"; } 2>/dev/null
         rm -f -- "$tmp_out"
     else
         # mktemp failed (should not happen in practice) - fall back to the
