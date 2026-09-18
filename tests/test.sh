@@ -3254,6 +3254,187 @@ fi
 
 rm -rf "$CFG_TMP3"
 
+echo "== custom modules: no modules directory =="
+MOD_TMP="$(mktemp -d)"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP}/nope" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    discover_modules
+')"
+[[ -z "$result" ]] && ok "discover_modules prints nothing when the modules directory does not exist" \
+    || bad "discover_modules should print nothing with no modules dir (got: $result)"
+
+echo "== custom modules: empty modules directory =="
+mkdir -p "${MOD_TMP}/empty/modules"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP}/empty" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    discover_modules
+')"
+[[ -z "$result" ]] && ok "discover_modules prints nothing for an empty modules directory" \
+    || bad "discover_modules should print nothing for an empty dir (got: $result)"
+
+echo "== custom modules: valid module discovery =="
+mkdir -p "${MOD_TMP}/valid/modules"
+printf 'ENABLED=false\nCOMMAND=echo hi\n' > "${MOD_TMP}/valid/modules/alpha.conf"
+printf 'ENABLED=false\nCOMMAND=echo hi\n' > "${MOD_TMP}/valid/modules/beta.conf"
+chmod 600 "${MOD_TMP}/valid/modules/alpha.conf" "${MOD_TMP}/valid/modules/beta.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP}/valid" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    discover_modules
+')"
+if [[ "$result" == $'alpha\nbeta' ]]; then
+    ok "discover_modules finds both valid modules, sorted"
+else
+    bad "discover_modules did not return the expected sorted names (got: '$result')"
+fi
+
+echo "== custom modules: invalid module name is skipped, discovery continues =="
+mkdir -p "${MOD_TMP}/badname/modules"
+printf 'ENABLED=false\nCOMMAND=echo hi\n' > "${MOD_TMP}/badname/modules/good.conf"
+printf 'ENABLED=false\nCOMMAND=echo hi\n' > "${MOD_TMP}/badname/modules/bad name!.conf"
+chmod 600 "${MOD_TMP}/badname/modules/good.conf" "${MOD_TMP}/badname/modules/bad name!.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP}/badname" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    discover_modules
+' 2>/dev/null)"
+[[ "$result" == "good" ]] && ok "discover_modules skips an invalid filename and still returns the valid one" \
+    || bad "discover_modules did not correctly skip the invalid name (got: '$result')"
+
+echo "== custom modules: path traversal is rejected by module_name_valid =="
+run_name_check() {
+    bash -c '
+        source "'"${LIB_DIR}"'/config.sh"
+        source "'"${LIB_DIR}"'/modules.sh"
+        module_name_valid "'"$1"'"
+    '
+}
+run_name_check ".." && bad "module_name_valid wrongly accepted '..'" || ok "module_name_valid rejects '..'"
+run_name_check "../evil" && bad "module_name_valid wrongly accepted '../evil'" || ok "module_name_valid rejects '../evil'"
+run_name_check "a/b" && bad "module_name_valid wrongly accepted 'a/b'" || ok "module_name_valid rejects 'a/b'"
+run_name_check 'a\b' && bad "module_name_valid wrongly accepted 'a\\b'" || ok "module_name_valid rejects 'a\\b'"
+run_name_check "valid-name_123" && ok "module_name_valid accepts a normal name" || bad "module_name_valid wrongly rejected a normal name"
+
+echo "== custom modules: malformed module definition does not crash discovery/reading =="
+mkdir -p "${MOD_TMP}/malformed/modules"
+printf 'this is not key=value at all\n\xff\xfe garbage bytes\n' > "${MOD_TMP}/malformed/modules/junk.conf"
+chmod 600 "${MOD_TMP}/malformed/modules/junk.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP}/malformed" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    discover_modules
+' 2>/dev/null)"
+[[ "$result" == "junk" ]] && ok "a module file with garbage content is still discovered (name derives from filename)" \
+    || bad "discovery crashed or misbehaved on a malformed module file (got: '$result')"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP}/malformed" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    declare -A fields=()
+    read_module_file "'"${MOD_TMP}"'/malformed/modules/junk.conf" fields
+    printf "exit=%s count=%s\n" "$?" "${#fields[@]}"
+')"
+[[ "$result" == "exit=0 count=0" ]] && ok "read_module_file on garbage content returns success with zero fields (nothing crashes)" \
+    || bad "read_module_file did not handle garbage content safely (got: '$result')"
+
+echo "== custom modules: duplicate key within one module file - last occurrence wins =="
+mkdir -p "${MOD_TMP}/dup/modules"
+printf 'ENABLED=false\nENABLED=true\nCOMMAND=echo hi\n' > "${MOD_TMP}/dup/modules/dupe.conf"
+chmod 600 "${MOD_TMP}/dup/modules/dupe.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP}/dup" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    declare -A fields=()
+    read_module_file "'"${MOD_TMP}"'/dup/modules/dupe.conf" fields
+    printf "%s" "${fields[ENABLED]}"
+')"
+[[ "$result" == "true" ]] && ok "a duplicate ENABLED key in one module file resolves to the last occurrence (true)" \
+    || bad "duplicate-key resolution in a module file was not last-wins (got: '$result')"
+
+echo "== custom modules: unreadable/unsafe-permission module file is refused, not crashed on =="
+mkdir -p "${MOD_TMP}/unsafe/modules"
+printf 'ENABLED=true\nCOMMAND=echo hi\n' > "${MOD_TMP}/unsafe/modules/unsafe.conf"
+chmod 666 "${MOD_TMP}/unsafe/modules/unsafe.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP}/unsafe" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    declare -A fields=()
+    read_module_file "'"${MOD_TMP}"'/unsafe/modules/unsafe.conf" fields
+    printf "exit=%s count=%s\n" "$?" "${#fields[@]}"
+')"
+[[ "$result" == "exit=1 count=0" ]] && ok "a world-writable module file is refused by read_module_file (returns 1, empty fields)" \
+    || bad "an unsafe-permission module file was not refused correctly (got: '$result')"
+chmod 600 "${MOD_TMP}/unsafe/modules/unsafe.conf"
+
+echo "== custom modules: safe symlink is discovered and read via its target =="
+mkdir -p "${MOD_TMP}/symlink/real" "${MOD_TMP}/symlink/modules"
+printf 'ENABLED=false\nCOMMAND=echo hi\n' > "${MOD_TMP}/symlink/real/target.conf"
+chmod 600 "${MOD_TMP}/symlink/real/target.conf"
+ln -s "${MOD_TMP}/symlink/real/target.conf" "${MOD_TMP}/symlink/modules/linked.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP}/symlink" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    discover_modules
+')"
+[[ "$result" == "linked" ]] && ok "a symlinked module file (safe target) is discovered under its link name" \
+    || bad "symlinked module discovery failed (got: '$result')"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP}/symlink" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    declare -A fields=()
+    read_module_file "'"${MOD_TMP}"'/symlink/modules/linked.conf" fields
+    printf "%s" "${fields[COMMAND]}"
+')"
+[[ "$result" == "echo hi" ]] && ok "read_module_file correctly reads a symlinked module's target content" \
+    || bad "read_module_file did not correctly follow the symlink (got: '$result')"
+
+echo "== custom modules: broken symlink is skipped, not crashed on =="
+ln -s "${MOD_TMP}/symlink/real/does-not-exist.conf" "${MOD_TMP}/symlink/modules/broken.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP}/symlink" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    discover_modules
+' 2>/dev/null)"
+[[ "$result" == "linked" ]] && ok "a broken symlink in the modules directory is silently skipped" \
+    || bad "a broken symlink broke discovery (got: '$result')"
+
+echo "== custom modules: reading a module file never executes anything (parser-only canary) =="
+rm -f /tmp/module-pwned-parseonly
+mkdir -p "${MOD_TMP}/canary/modules"
+cat > "${MOD_TMP}/canary/modules/evil.conf" <<'EOF'
+ENABLED=false
+COMMAND=$(touch /tmp/module-pwned-parseonly)
+EOF
+chmod 600 "${MOD_TMP}/canary/modules/evil.conf"
+TOOLKIT_CONFIG_DIR="${MOD_TMP}/canary" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    discover_modules >/dev/null
+    declare -A fields=()
+    read_module_file "'"${MOD_TMP}"'/canary/modules/evil.conf" fields
+' >/dev/null 2>&1
+if [[ ! -e /tmp/module-pwned-parseonly ]]; then
+    ok "discovering and reading a module file never executes a \$(...) payload in its COMMAND field"
+else
+    bad "SECURITY: parsing a module file executed a shell payload"
+fi
+rm -f /tmp/module-pwned-parseonly
+
+echo "== custom modules: no eval, no source of module files (static check) =="
+if ! grep -qE '\beval\b' "${TOOLKIT_DIR}/lib/modules.sh"; then
+    ok "lib/modules.sh contains no 'eval'"
+else
+    bad "lib/modules.sh contains 'eval' - forbidden by this sprint's design"
+fi
+if ! grep -qE '\bsource\b.*(path|COMMAND|fields|module)' "${TOOLKIT_DIR}/lib/modules.sh"; then
+    ok "lib/modules.sh does not source any module-derived path or field"
+else
+    bad "lib/modules.sh appears to source a module file or field - forbidden"
+fi
+
+rm -rf "$MOD_TMP"
+
 echo
 echo "Results: ${pass} passed, ${fail} failed"
 [[ "$fail" -eq 0 ]]
