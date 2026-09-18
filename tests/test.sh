@@ -3756,6 +3756,70 @@ fi
 
 rm -rf "$MOD_TMP4"
 
+echo "== custom modules: info's default behavior is unchanged when the feature is off =="
+MOD_TMP3="$(mktemp -d)"
+without_modules="$(TOOLKIT_CONFIG_DIR="${MOD_TMP3}/nope" "${BIN_DIR}/info" 2>/dev/null)"
+if ! grep -q "CUSTOM MODULES" <<<"$without_modules"; then
+    ok "info does not show a CUSTOM MODULES section when CUSTOM_MODULES_ENABLED is unset"
+else
+    bad "info showed a CUSTOM MODULES section with no config at all - default-off is broken"
+fi
+without_var="$(env -u TOOLKIT_CONFIG_DIR "${BIN_DIR}/info" 2>/dev/null | grep -vE '^uptime|^load')"
+with_missing_dir_filtered="$(printf '%s' "$without_modules" | grep -vE '^uptime|^load')"
+if [[ "$without_var" == "$with_missing_dir_filtered" ]]; then
+    ok "info's output (ignoring volatile uptime/load lines) is identical whether TOOLKIT_CONFIG_DIR is unset or points at a missing directory"
+else
+    bad "info's output differs between an unset TOOLKIT_CONFIG_DIR and one pointing at a missing directory"
+fi
+
+echo "== custom modules: info shows the section, runs an enabled module, and raises an alert when turned on =="
+mkdir -p "${MOD_TMP3}/on/modules"
+printf 'CUSTOM_MODULES_ENABLED=true\n' > "${MOD_TMP3}/on/config"
+chmod 600 "${MOD_TMP3}/on/config"
+printf 'ENABLED=true\nCOMMAND=exit 2\n' > "${MOD_TMP3}/on/modules/broken.conf"
+chmod 600 "${MOD_TMP3}/on/modules/broken.conf"
+if TOOLKIT_CONFIG_DIR="${MOD_TMP3}/on" "${BIN_DIR}/info" >/tmp/toolkit_test_info_modules.out 2>/tmp/toolkit_test_info_modules.err; then
+    alerts_section="$(sed -n '/^ALERTS$/,$p' /tmp/toolkit_test_info_modules.out)"
+    if grep -q "CUSTOM MODULES" /tmp/toolkit_test_info_modules.out && \
+       grep -q "broken" /tmp/toolkit_test_info_modules.out && \
+       grep -q "non-zero (2)" <<<"$alerts_section"; then
+        ok "info runs an enabled custom module and surfaces its failure as an alert"
+    else
+        bad "info did not correctly show the custom module or its alert: $(cat /tmp/toolkit_test_info_modules.out)"
+    fi
+else
+    bad "info exited non-zero with custom modules enabled: $(cat /tmp/toolkit_test_info_modules.err)"
+fi
+
+echo "== custom modules: info with the feature on but zero module files shows a clean empty state =="
+mkdir -p "${MOD_TMP3}/on-empty/modules"
+printf 'CUSTOM_MODULES_ENABLED=true\n' > "${MOD_TMP3}/on-empty/config"
+chmod 600 "${MOD_TMP3}/on-empty/config"
+if TOOLKIT_CONFIG_DIR="${MOD_TMP3}/on-empty" "${BIN_DIR}/info" >/tmp/toolkit_test_info_emptymodules.out 2>/tmp/toolkit_test_info_emptymodules.err; then
+    if grep -q "No custom modules configured" /tmp/toolkit_test_info_emptymodules.out; then
+        ok "info shows a clean empty state when the feature is on but no modules exist"
+    else
+        bad "info did not show the expected empty-state message"
+    fi
+else
+    bad "info exited non-zero with the feature on and no modules: $(cat /tmp/toolkit_test_info_emptymodules.err)"
+fi
+
+echo "== custom modules: a slow module's timeout does not hang the whole dashboard =="
+mkdir -p "${MOD_TMP3}/slow-info/modules"
+printf 'CUSTOM_MODULES_ENABLED=true\n' > "${MOD_TMP3}/slow-info/config"
+chmod 600 "${MOD_TMP3}/slow-info/config"
+printf 'ENABLED=true\nCOMMAND=sleep 5\nTIMEOUT=1\n' > "${MOD_TMP3}/slow-info/modules/slow.conf"
+chmod 600 "${MOD_TMP3}/slow-info/modules/slow.conf"
+start_ts=$(date +%s)
+TOOLKIT_CONFIG_DIR="${MOD_TMP3}/slow-info" "${BIN_DIR}/info" >/dev/null 2>&1
+end_ts=$(date +%s)
+elapsed=$(( end_ts - start_ts ))
+[[ "$elapsed" -lt 4 ]] && ok "info completes promptly (${elapsed}s) even with a module configured to sleep 5s, because its TIMEOUT=1 is honored" \
+    || bad "a slow module's timeout did not bound info's total runtime (elapsed ${elapsed}s)"
+
+rm -rf "$MOD_TMP3"
+
 echo
 echo "Results: ${pass} passed, ${fail} failed"
 [[ "$fail" -eq 0 ]]

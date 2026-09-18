@@ -31,6 +31,8 @@ source "${LIB_DIR}/logs.sh"
 source "${LIB_DIR}/status.sh"
 # shellcheck source=../lib/config.sh
 source "${LIB_DIR}/config.sh"
+# shellcheck source=../lib/modules.sh
+source "${LIB_DIR}/modules.sh"
 
 # Configurable, documented alert thresholds (not server-specific values).
 # Centralized here so a future configuration layer can override them
@@ -187,6 +189,28 @@ fi
 reboot_required="$(get_reboot_required)"
 kv "reboot required" "$reboot_required"
 printf '\n'
+
+# -------------------------------------------------------- CUSTOM MODULES ---
+# Entirely skipped (zero extra work, zero extra processes) unless the
+# user has explicitly set CUSTOM_MODULES_ENABLED=true - this is the one
+# check that keeps info's default behavior unaffected by this feature.
+if modules_enabled; then
+    print_header "CUSTOM MODULES"
+    module_count=0
+    while IFS= read -r mod_name; do
+        [[ -z "$mod_name" ]] && continue
+        module_count=$(( module_count + 1 ))
+        IFS=$'\t' read -r mod_status mod_message mod_output <<<"$(run_module "$mod_name")"
+        kv "$mod_name" "$mod_message"
+        [[ -n "$mod_output" ]] && kv "  output" "$(truncate_text "$mod_output" 60)"
+        case "$mod_status" in
+            "$STATUS_WARN") add_alert alerts WARN "module:${mod_name}" "$mod_message" ;;
+            "$STATUS_ERROR") add_alert alerts ERROR "module:${mod_name}" "$mod_message" ;;
+        esac
+    done < <(discover_modules)
+    [[ "$module_count" -eq 0 ]] && printf 'No custom modules configured\n'
+    printf '\n'
+fi
 
 # -------------------------------------------------------------- ALERTS ---
 disk_pct_num="$(strip_pct "$disk_pct")"
