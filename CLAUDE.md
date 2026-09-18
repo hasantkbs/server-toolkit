@@ -21,7 +21,7 @@ Kullanıcı bir terminal oturumunda **"terminal"** dediğinde, bu projeden
 - Sprint 10: `info` v2 (hızlı dashboard) + `lib/status.sh` (ortak status/alert contract)
 - Sprint 11: configuration engine (`lib/config.sh`, opsiyonel `~/.config/server-toolkit/config` — bkz. `docs/config.md`), `info`'nin RAM_ALERT_PCT eşiği bu engine'e bağlandı.
 
-312/312 test PASS. Tüm komutlar read-only, destructive command yok,
+321/321 test PASS. Tüm komutlar read-only, destructive command yok,
 server-specific hardcoding yok.
 
 ## Mimari
