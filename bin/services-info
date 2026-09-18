@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# services-info - systemd service diagnostics dashboard (part of server-toolkit)
+#
+# Strictly read-only: only list-units/list-unit-files/show/is-system-running
+# and a single bounded journalctl read are used. Nothing here ever starts,
+# stops, restarts, reloads, enables, disables, or masks a unit.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
+
+# shellcheck source=../lib/common.sh
+source "${LIB_DIR}/common.sh"
+# shellcheck source=../lib/services.sh
+source "${LIB_DIR}/services.sh"
+
+# Candidate names for the IMPORTANT SERVICES section. This is a set of
+# common Ubuntu/Debian server service base-names to *check for*, not a
+# rigid list of services a host is required to run: each candidate is
+# looked up individually and silently skipped if not installed on this
+# host (LoadState=not-found), so an absent service is never treated as a
+# problem. Configurable here rather than hard-coded deeper in the library.
+IMPORTANT_SERVICE_CANDIDATES=(
+    ssh sshd nginx docker containerd ufw cron
+    systemd-resolved systemd-networkd NetworkManager
+)
+UNIT_DETAIL_PROPS="Id,LoadState,ActiveState,SubState,MainPID,ActiveEnterTimestamp,Description,NRestarts,Result"
+
+alerts=()
+
+# --------------------------------------------------------------- SERVICES ---
+print_header "SERVICES"
+
+if ! systemd_available; then
+    kv "Systemd" "N/A"
+    printf '\n'
+    print_header "ALERTS"
+    printf '\xe2\x9c\x93 Systemd healthy\n'
+    exit 0
+fi
+
+all_units="$(get_all_service_units)" || all_units=""
+failed_units="$(get_failed_service_units)" || failed_units=""
+
+loaded_count=0
+running_count=0
+if [[ -n "$all_units" ]]; then
+    loaded_count="$(wc -l <<<"$all_units" | tr -d '[:space:]')"
+    running_count="$(awk -F'|' '$3=="active"' <<<"$all_units" | wc -l | tr -d '[:space:]')"
+fi
+failed_count=0
+[[ -n "$failed_units" ]] && failed_count="$(wc -l <<<"$failed_units" | tr -d '[:space:]')"
+
+kv "Systemd" "$(get_systemd_version)"
+kv "Status" "$(get_systemd_running_state)"
+kv "Running" "$running_count"
+kv "Failed" "$failed_count"
+kv "Loaded" "$loaded_count"
+printf '\n'
+
+# --------------------------------------------------------- FAILED SERVICES ---
+print_header "FAILED SERVICES"
+
+if [[ "$failed_count" -gt 0 ]]; then
+    while IFS='|' read -r unit load active sub desc; do
+        [[ -z "$unit" ]] && continue
+        props="$(get_unit_properties "$unit" "$UNIT_DETAIL_PROPS")" || props=""
+        pid="$(format_service_pid "$(extract_prop "$props" MainPID)")"
+        restarts="$(format_restart_count "$(extract_prop "$props" NRestarts)")"
+        result="$(extract_prop "$props" Result)"
+
+        printf '%s\n' "$unit"
+        kv "  State" "${active}/${sub}" 16
+        kv "  Load" "$load" 16
+        kv "  Description" "${desc:-N/A}" 16
+        kv "  Main PID" "$pid" 16
+        kv "  Result" "${result:-N/A}" 16
+        kv "  Restarts" "$restarts" 16
+
+        if excerpt="$(get_unit_journal_excerpt "$unit" 3)" && [[ -n "$excerpt" ]]; then
+            printf '  Recent log:\n'
+            while IFS= read -r logline; do
+                [[ -z "$logline" ]] && continue
+                printf '    %s\n' "$logline"
+            done <<<"$excerpt"
+        fi
+        printf '\n'
+    done <<<"$failed_units"
+    alerts+=("${failed_count} failed systemd service(s)")
+else
+    printf 'None\n\n'
+fi
+
+# --------------------------------------------------------- ACTIVE SERVICES ---
+print_header "ACTIVE SERVICES"
+
+if [[ "$loaded_count" -gt 0 ]] && active_lines="$(awk -F'|' '$3=="active"' <<<"$all_units")" && [[ -n "$active_lines" ]]; then
+    printf '%-32s %-12s %s\n' "SERVICE" "STATE" "SUB"
+    while IFS='|' read -r unit load active sub desc; do
+        [[ -z "$unit" ]] && continue
+        printf '%-32s %-12s %s\n' "$unit" "$active" "$sub"
+    done <<<"$active_lines"
+else
+    printf 'None\n'
+fi
+printf '\n'
+
+# ------------------------------------------------------ IMPORTANT SERVICES ---
+print_header "IMPORTANT SERVICES"
+
+important_found=0
+printed_header=0
+for candidate in "${IMPORTANT_SERVICE_CANDIDATES[@]}"; do
+    unit="${candidate}.service"
+    props="$(get_unit_properties "$unit" "$UNIT_DETAIL_PROPS")" || props=""
+    [[ -z "$props" ]] && continue
+    unit_exists "$props" || continue
+
+    if [[ "$printed_header" -eq 0 ]]; then
+        printf '%-24s %-10s %-10s %-8s %-10s %s\n' "SERVICE" "STATUS" "SUB" "PID" "UPTIME" "RESTARTS"
+        printed_header=1
+    fi
+
+    active="$(extract_prop "$props" ActiveState)"
+    sub="$(extract_prop "$props" SubState)"
+    pid="$(format_service_pid "$(extract_prop "$props" MainPID)")"
+    uptime="$(format_service_uptime "$(extract_prop "$props" ActiveEnterTimestamp)")"
+    restarts="$(format_restart_count "$(extract_prop "$props" NRestarts)")"
+
+    printf '%-24s %-10s %-10s %-8s %-10s %s\n' "$unit" "${active:-N/A}" "${sub:-N/A}" "$pid" "$uptime" "$restarts"
+    important_found=1
+done
+[[ "$important_found" -eq 0 ]] && printf 'None detected\n'
+printf '\n'
+
+# ----------------------------------------------------------------- ALERTS ---
+if [[ "$failed_count" -eq 0 ]]; then
+    state="$(get_systemd_running_state)"
+    [[ "$state" == "degraded" ]] && alerts+=("systemd reports overall state 'degraded'")
+fi
+
+print_header "ALERTS"
+if [[ "${#alerts[@]}" -eq 0 ]]; then
+    printf '\xe2\x9c\x93 Systemd healthy\n'
+else
+    for a in "${alerts[@]}"; do
+        printf '\xe2\x9a\xa0 %s\n' "$a"
+    done
+fi

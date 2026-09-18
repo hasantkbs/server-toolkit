@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# process-info - process inspection dashboard (part of server-toolkit)
+#
+# Strictly read-only/observation-only: a single `ps` snapshot is taken and
+# sliced/sorted/counted locally. Nothing here ever kills, stops, restarts,
+# renices, or otherwise changes any process, service, or system setting.
+# Process command text from `ps` is data only - it is printed, never
+# evaluated or executed.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
+
+# shellcheck source=../lib/common.sh
+source "${LIB_DIR}/common.sh"
+# shellcheck source=../lib/system.sh
+source "${LIB_DIR}/system.sh"
+# shellcheck source=../lib/process.sh
+source "${LIB_DIR}/process.sh"
+
+# Configurable, documented alert thresholds (not server-specific values).
+CPU_ALERT_THRESHOLD=90   # percent, single-snapshot instantaneous reading
+MEM_ALERT_THRESHOLD=90   # percent of total RAM
+TOP_N=5
+
+alerts=()
+
+snapshot=""
+have_snapshot=0
+if snapshot="$(get_process_snapshot)" && [[ -n "$snapshot" ]]; then
+    have_snapshot=1
+fi
+
+# --------------------------------------------------------- PROCESS OVERVIEW ---
+print_header "PROCESS OVERVIEW"
+
+if [[ "$have_snapshot" -eq 1 ]]; then
+    read -r total running sleeping stopped zombie <<<"$(count_process_states "$snapshot")"
+else
+    total="N/A" running="N/A" sleeping="N/A" stopped="N/A" zombie="N/A"
+fi
+
+kv "Total processes" "$total" 20
+kv "Running" "$running" 20
+kv "Sleeping" "$sleeping" 20
+kv "Stopped" "$stopped" 20
+kv "Zombie" "$zombie" 20
+printf '\n'
+
+# ------------------------------------------------------------------ TOP CPU ---
+print_header "TOP CPU"
+
+if [[ "$have_snapshot" -eq 1 ]] && top_cpu="$(top_n_by_field "$snapshot" 4 "$TOP_N")" && [[ -n "$top_cpu" ]]; then
+    printf '%-8s %-12s %-8s %-8s %s\n' "PID" "USER" "CPU%" "MEM%" "COMMAND"
+    while IFS='|' read -r pid _ppid user cpu mem _stat cmd; do
+        [[ -z "$pid" ]] && continue
+        printf '%-8s %-12s %-8s %-8s %s\n' "$pid" "${user:-N/A}" "${cpu:-N/A}" "${mem:-N/A}" "${cmd:-N/A}"
+    done <<<"$top_cpu"
+else
+    printf 'N/A\n'
+fi
+printf '\n'
+
+# --------------------------------------------------------------- TOP MEMORY ---
+print_header "TOP MEMORY"
+
+if [[ "$have_snapshot" -eq 1 ]] && top_mem="$(top_n_by_field "$snapshot" 5 "$TOP_N")" && [[ -n "$top_mem" ]]; then
+    printf '%-8s %-12s %-8s %-8s %s\n' "PID" "USER" "CPU%" "MEM%" "COMMAND"
+    while IFS='|' read -r pid _ppid user cpu mem _stat cmd; do
+        [[ -z "$pid" ]] && continue
+        printf '%-8s %-12s %-8s %-8s %s\n' "$pid" "${user:-N/A}" "${cpu:-N/A}" "${mem:-N/A}" "${cmd:-N/A}"
+    done <<<"$top_mem"
+else
+    printf 'N/A\n'
+fi
+printf '\n'
+
+# --------------------------------------------------------------- SYSTEM LOAD ---
+print_header "SYSTEM LOAD"
+
+IFS='|' read -r load1 load5 load15 <<<"$(parse_load_average "$(get_load_average)")"
+kv "1m" "$load1" 8
+kv "5m" "$load5" 8
+kv "15m" "$load15" 8
+printf '\n'
+
+# --------------------------------------------------------- PROCESS ANOMALIES ---
+print_header "PROCESS ANOMALIES"
+
+high_cpu_count=0
+high_mem_count=0
+if [[ "$have_snapshot" -eq 1 ]]; then
+    high_cpu_count="$(count_above_threshold "$snapshot" 4 "$CPU_ALERT_THRESHOLD")"
+    high_mem_count="$(count_above_threshold "$snapshot" 5 "$MEM_ALERT_THRESHOLD")"
+    kv "Zombie processes" "$zombie" 22
+    kv "High CPU processes" "$high_cpu_count" 22
+    kv "High memory processes" "$high_mem_count" 22
+else
+    kv "Zombie processes" "N/A" 22
+    kv "High CPU processes" "N/A" 22
+    kv "High memory processes" "N/A" 22
+fi
+printf '\n'
+
+if [[ "$have_snapshot" -eq 1 ]]; then
+    [[ "$zombie" =~ ^[0-9]+$ && "$zombie" -gt 0 ]] && alerts+=("${zombie} zombie process(es)")
+    [[ "$high_cpu_count" =~ ^[0-9]+$ && "$high_cpu_count" -gt 0 ]] && \
+        alerts+=("${high_cpu_count} process(es) above ${CPU_ALERT_THRESHOLD}% CPU")
+    [[ "$high_mem_count" =~ ^[0-9]+$ && "$high_mem_count" -gt 0 ]] && \
+        alerts+=("${high_mem_count} process(es) above ${MEM_ALERT_THRESHOLD}% memory")
+fi
+
+# ----------------------------------------------------------------- ALERTS ---
+print_header "ALERTS"
+if [[ "${#alerts[@]}" -eq 0 ]]; then
+    printf '\xe2\x9c\x93 No process anomalies\n'
+else
+    for a in "${alerts[@]}"; do
+        printf '\xe2\x9a\xa0 %s\n' "$a"
+    done
+fi

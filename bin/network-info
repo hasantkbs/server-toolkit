@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# network-info - network diagnostics dashboard (part of server-toolkit)
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
+
+# shellcheck source=../lib/common.sh
+source "${LIB_DIR}/common.sh"
+# shellcheck source=../lib/system.sh
+source "${LIB_DIR}/system.sh"
+# shellcheck source=../lib/network.sh
+source "${LIB_DIR}/network.sh"
+
+alerts=()
+
+iface="$(get_primary_interface)"
+
+# ------------------------------------------------------------ INTERFACES ---
+print_header "INTERFACES"
+
+if phys_lines="$(get_physical_interface_lines)" && [[ -n "$phys_lines" ]]; then
+    printf '%-14s %-8s %-20s %s\n' "INTERFACE" "STATE" "IPv4" "SPEED"
+    while IFS='|' read -r name state ipv4 speed; do
+        [[ -z "$name" ]] && continue
+        printf '%-14s %-8s %-20s %s\n' "$name" "$state" "$ipv4" "$speed"
+    done <<<"$phys_lines"
+else
+    printf 'N/A\n'
+fi
+printf '\n'
+
+print_header "DOCKER NETWORKING"
+if docker_link_lines="$(get_docker_link_lines)" && [[ -n "$docker_link_lines" ]]; then
+    while IFS='|' read -r dname dstate; do
+        [[ -z "$dname" ]] && continue
+        printf '%-20s %s\n' "$dname" "$dstate"
+    done <<<"$docker_link_lines"
+else
+    printf 'None\n'
+fi
+printf '\n'
+
+# --------------------------------------------------------------- TRAFFIC ---
+print_header "TRAFFIC"
+
+rx_bytes="" rx_packets="" rx_errs="" rx_drop="" tx_bytes="" tx_packets="" tx_errs="" tx_drop=""
+if [[ -n "$iface" ]] && traffic="$(get_interface_traffic "$iface")"; then
+    read -r rx_bytes rx_packets rx_errs rx_drop tx_bytes tx_packets tx_errs tx_drop <<<"$traffic"
+    printf '%-16s%-16s%s\n' "Interface" "RX" "TX"
+    printf '%-16s%-16s%s\n' "$iface" "$(bytes_to_human "$rx_bytes")" "$(bytes_to_human "$tx_bytes")"
+    printf '\n'
+    kv "RX packets" "$rx_packets"
+    kv "TX packets" "$tx_packets"
+    kv "RX errors" "$rx_errs"
+    kv "TX errors" "$tx_errs"
+    kv "RX drops" "$rx_drop"
+    kv "TX drops" "$tx_drop"
+
+    if [[ "$rx_errs" -gt 0 || "$tx_errs" -gt 0 ]]; then
+        alerts+=("Interface '${iface}' has packet errors (RX ${rx_errs}, TX ${tx_errs})")
+    fi
+    if [[ "$rx_drop" -gt 0 || "$tx_drop" -gt 0 ]]; then
+        alerts+=("Interface '${iface}' has dropped packets (RX ${rx_drop}, TX ${tx_drop})")
+    fi
+else
+    printf 'N/A\n'
+fi
+printf '\n'
+
+# ------------------------------------------------------- LINK INFORMATION ---
+print_header "LINK INFORMATION"
+
+if [[ -n "$iface" ]]; then
+    iface_state="$(get_interface_state "$iface")"
+    kv "state" "$iface_state"
+    kv "link speed" "$(get_link_speed "$iface")"
+    kv "MAC address" "$(get_mac_address "$iface")"
+    kv "IPv4" "$(get_ipv4_address "$iface")"
+    ipv6="$(get_ipv6_address "$iface")"
+    kv "IPv6" "${ipv6:-N/A}"
+
+    if [[ "$iface_state" != "up" ]]; then
+        alerts+=("Primary interface '${iface}' is not up (state: ${iface_state})")
+    fi
+else
+    printf 'N/A (no primary interface detected)\n'
+fi
+printf '\n'
+
+# ---------------------------------------------------------- CONNECTIVITY ---
+print_header "CONNECTIVITY"
+
+if has_default_route; then
+    kv "Default route" "OK"
+else
+    kv "Default route" "FAIL"
+    alerts+=("No default route")
+fi
+
+if check_dns; then
+    kv "DNS" "OK"
+else
+    kv "DNS" "FAIL"
+    alerts+=("DNS resolution failed")
+fi
+
+if check_internet; then
+    kv "Internet" "OK"
+else
+    kv "Internet" "FAIL"
+    alerts+=("External connectivity check failed")
+fi
+printf '\n'
+
+# ------------------------------------------------------- LISTENING PORTS ---
+print_header "LISTENING PORTS"
+
+if port_lines="$(get_listening_ports)" && [[ -n "$port_lines" ]]; then
+    public_lines="$(awk -F'|' '$4=="PUBLIC"' <<<"$port_lines")"
+    local_lines="$(awk -F'|' '$4=="LOCAL"' <<<"$port_lines")"
+
+    if [[ -n "$public_lines" ]]; then
+        printf 'PUBLIC\n'
+        printf '%-18s %-8s %s\n' "BIND" "PORT" "PROCESS"
+        while IFS='|' read -r bind port proc _cat; do
+            [[ -z "$bind" ]] && continue
+            printf '%-18s %-8s %s\n' "$bind" "$port" "$proc"
+        done <<<"$public_lines"
+    fi
+
+    if [[ -n "$local_lines" ]]; then
+        [[ -n "$public_lines" ]] && printf '\n'
+        printf 'LOCAL\n'
+        printf '%-18s %-8s %s\n' "BIND" "PORT" "PROCESS"
+        while IFS='|' read -r bind port proc _cat; do
+            [[ -z "$bind" ]] && continue
+            printf '%-18s %-8s %s\n' "$bind" "$port" "$proc"
+        done <<<"$local_lines"
+    fi
+else
+    printf 'None\n'
+fi
+printf '\n'
+
+# ------------------------------------------------------------ CONNECTIONS ---
+print_header "CONNECTIONS"
+
+if state_lines="$(get_connection_state_counts)" && [[ -n "$state_lines" ]]; then
+    while IFS='|' read -r state count; do
+        [[ -z "$state" ]] && continue
+        kv "$(network_normalize_tcp_state "$state")" "$count"
+    done <<<"$state_lines"
+else
+    printf 'None\n'
+fi
+printf '\n'
+
+# ---------------------------------------------------------------- ALERTS ---
+print_header "ALERTS"
+if [[ "${#alerts[@]}" -eq 0 ]]; then
+    printf '\xe2\x9c\x93 Network healthy\n'
+else
+    for a in "${alerts[@]}"; do
+        printf '\xe2\x9a\xa0 %s\n' "$a"
+    done
+fi

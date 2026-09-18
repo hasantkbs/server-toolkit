@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+# storage-info - storage/disk diagnostics dashboard (part of server-toolkit)
+#
+# More expensive than `info` by design (bounded du/find scans), but every
+# scan is depth-limited, time-bounded, stays on one filesystem, and never
+# follows symlinks. Nothing here writes, deletes, prunes, or restarts
+# anything.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
+
+# shellcheck source=../lib/common.sh
+source "${LIB_DIR}/common.sh"
+# shellcheck source=../lib/docker.sh
+source "${LIB_DIR}/docker.sh"
+# shellcheck source=../lib/storage.sh
+source "${LIB_DIR}/storage.sh"
+
+# Configurable knobs (not server-specific values).
+FS_WARN_PCT=80
+FS_CRIT_PCT=90
+INODE_WARN_PCT=80
+INODE_CRIT_PCT=90
+DOCKER_DISK_ALERT_BYTES=$(( 50 * 1024 * 1024 * 1024 ))  # 50 GiB
+LARGE_FILE_MIN_SIZE="500M"
+LARGE_FILE_ALERT_BYTES=$(( 1024 * 1024 * 1024 ))        # 1 GiB
+LARGEST_DIRS_COUNT=8
+LARGEST_FILES_COUNT=10
+
+ROOT_BREAKDOWN_DIRS=(/home /opt /var /usr /tmp)
+LARGE_FILE_SEARCH_DIRS=(/home /opt /var/log /var/lib/docker)
+
+alerts=()
+
+# ------------------------------------------------------------ FILESYSTEM ---
+print_header "FILESYSTEM"
+
+if fs_lines="$(get_filesystem_lines)" && [[ -n "$fs_lines" ]]; then
+    printf '%-16s %-8s %-8s %-8s %-8s %s\n' "MOUNT" "TYPE" "SIZE" "USED" "FREE" "USE%"
+    while IFS='|' read -r mount fstype size used avail pcent; do
+        [[ -z "$mount" ]] && continue
+        printf '%-16s %-8s %-8s %-8s %-8s %s\n' \
+            "$mount" "$fstype" "$(bytes_to_human "$size")" "$(bytes_to_human "$used")" \
+            "$(bytes_to_human "$avail")" "$pcent"
+
+        pct_num="${pcent%\%}"
+        if [[ "$pct_num" =~ ^[0-9]+$ ]]; then
+            if [[ "$pct_num" -ge "$FS_CRIT_PCT" ]]; then
+                alerts+=("Filesystem '${mount}' is critically full (${pcent})")
+            elif [[ "$pct_num" -ge "$FS_WARN_PCT" ]]; then
+                alerts+=("Filesystem '${mount}' is getting full (${pcent})")
+            fi
+        fi
+    done <<<"$fs_lines"
+else
+    printf 'N/A\n'
+fi
+printf '\n'
+
+# ---------------------------------------------------------------- INODES ---
+print_header "INODES"
+
+if inode_lines="$(get_inode_lines)" && [[ -n "$inode_lines" ]]; then
+    while IFS='|' read -r mount ipcent; do
+        [[ -z "$mount" ]] && continue
+        kv "$mount" "$ipcent" 16
+
+        ipct_num="${ipcent%\%}"
+        if [[ "$ipct_num" =~ ^[0-9]+$ ]]; then
+            if [[ "$ipct_num" -ge "$INODE_CRIT_PCT" ]]; then
+                alerts+=("Inode usage on '${mount}' is critical (${ipcent})")
+            elif [[ "$ipct_num" -ge "$INODE_WARN_PCT" ]]; then
+                alerts+=("Inode usage on '${mount}' is high (${ipcent})")
+            fi
+        fi
+    done <<<"$inode_lines"
+else
+    printf 'N/A\n'
+fi
+printf '\n'
+
+# ------------------------------------------------------- STORAGE BREAKDOWN ---
+print_header "STORAGE BREAKDOWN"
+
+breakdown_found=0
+for dir in "${ROOT_BREAKDOWN_DIRS[@]}"; do
+    [[ -d "$dir" ]] || continue
+    if bytes="$(get_dir_total_bytes "$dir")" && [[ -n "$bytes" ]]; then
+        printf '%-14s %s\n' "$dir" "$(bytes_to_human "$bytes")"
+        breakdown_found=1
+    fi
+done
+[[ "$breakdown_found" -eq 0 ]] && printf 'N/A\n'
+printf '\n'
+
+# ------------------------------------------------------ LARGEST DIRECTORIES ---
+print_header "LARGEST DIRECTORIES"
+
+large_dir_entries=()
+
+collect_dir_sizes() {
+    local path="$1" depth="$2"
+    [[ -d "$path" ]] || return 0
+    if [[ "$depth" -eq 0 ]]; then
+        local bytes
+        if bytes="$(get_dir_total_bytes "$path")" && [[ -n "$bytes" ]]; then
+            large_dir_entries+=("$(printf '%s\t%s' "$bytes" "$path")")
+        fi
+    else
+        local lines
+        if lines="$(get_dir_sizes_at_depth "$path" "$depth")" && [[ -n "$lines" ]]; then
+            local bytes subpath
+            while IFS=$'\t' read -r bytes subpath; do
+                [[ -z "$subpath" ]] && continue
+                [[ "$subpath" == "$path" ]] && continue
+                large_dir_entries+=("$(printf '%s\t%s' "$bytes" "$subpath")")
+            done <<<"$lines"
+        fi
+    fi
+}
+
+collect_dir_sizes "/home" 2
+collect_dir_sizes "/opt" 1
+collect_dir_sizes "/var/lib/docker" 0
+collect_dir_sizes "/var/log" 0
+
+if [[ "${#large_dir_entries[@]}" -gt 0 ]]; then
+    sorted_dirs="$(printf '%s\n' "${large_dir_entries[@]}" | sort -t $'\t' -k1,1 -rn | awk -F'\t' -v n="$LARGEST_DIRS_COUNT" 'NR<=n')"
+    while IFS=$'\t' read -r bytes path; do
+        [[ -z "$path" ]] && continue
+        printf '%-32s %s\n' "$path" "$(bytes_to_human "$bytes")"
+    done <<<"$sorted_dirs"
+else
+    printf 'None\n'
+fi
+printf '\n'
+
+# ----------------------------------------------------------- LARGEST FILES ---
+print_header "LARGEST FILES"
+
+large_file_entries=()
+for dir in "${LARGE_FILE_SEARCH_DIRS[@]}"; do
+    [[ -d "$dir" ]] || continue
+    if files="$(get_large_files_in "$dir" "$LARGE_FILE_MIN_SIZE")" && [[ -n "$files" ]]; then
+        large_file_entries+=("$files")
+    fi
+done
+
+huge_file_count=0
+if [[ "${#large_file_entries[@]}" -gt 0 ]]; then
+    sorted_files="$(printf '%s\n' "${large_file_entries[@]}" | sort -t $'\t' -k1,1 -rn | awk -F'\t' -v n="$LARGEST_FILES_COUNT" 'NR<=n')"
+    while IFS=$'\t' read -r bytes path; do
+        [[ -z "$path" ]] && continue
+        label=""
+        [[ "$bytes" -ge "$LARGE_FILE_ALERT_BYTES" ]] && { label="  [!]"; huge_file_count=$(( huge_file_count + 1 )); }
+        printf '%-60s %8s%s\n' "$path" "$(bytes_to_human "$bytes")" "$label"
+    done <<<"$sorted_files"
+else
+    printf 'None\n'
+fi
+
+if [[ "$huge_file_count" -gt 0 ]]; then
+    alerts+=("${huge_file_count} file(s) at or above 1GB found under scanned paths (see LARGEST FILES)")
+fi
+printf '\n'
+
+# ------------------------------------------------------------ DOCKER STORAGE ---
+print_header "DOCKER STORAGE"
+
+docker_total_bytes=0
+if ! docker_available; then
+    kv "Docker" "unavailable"
+else
+    if df_lines="$(get_docker_disk_usage_lines)" && [[ -n "$df_lines" ]]; then
+        while IFS='|' read -r dtype dsize _dreclaim; do
+            [[ -z "$dtype" ]] && continue
+            kv "$dtype" "$dsize" 16
+            dbytes="$(docker_size_to_bytes "$dsize")" || dbytes=0
+            docker_total_bytes=$(( docker_total_bytes + dbytes ))
+        done <<<"$df_lines"
+        kv "Total" "$(bytes_to_human "$docker_total_bytes")" 16
+
+        if [[ "$docker_total_bytes" -ge "$DOCKER_DISK_ALERT_BYTES" ]]; then
+            alerts+=("Docker storage usage is unusually large ($(bytes_to_human "$docker_total_bytes"))")
+        fi
+    else
+        kv "Docker" "N/A"
+    fi
+fi
+printf '\n'
+
+# ---------------------------------------------------------------- DISK I/O ---
+print_header "DISK I/O"
+printf '(cumulative counters since boot, not a live rate)\n'
+
+if disk_lines="$(get_diskstats_lines)" && [[ -n "$disk_lines" ]]; then
+    printf '%-12s %-10s %s\n' "DEVICE" "READ" "WRITE"
+    while IFS='|' read -r device read_bytes write_bytes; do
+        [[ -z "$device" ]] && continue
+        printf '%-12s %-10s %s\n' "$device" "$(bytes_to_human "$read_bytes")" "$(bytes_to_human "$write_bytes")"
+    done <<<"$disk_lines"
+else
+    printf 'N/A\n'
+fi
+printf '\n'
+
+# ---------------------------------------------------------------- ALERTS ---
+print_header "ALERTS"
+if [[ "${#alerts[@]}" -eq 0 ]]; then
+    printf '\xe2\x9c\x93 Storage healthy\n'
+else
+    for a in "${alerts[@]}"; do
+        printf '\xe2\x9a\xa0 %s\n' "$a"
+    done
+fi

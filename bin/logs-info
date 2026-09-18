@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# logs-info - bounded recent-log health summary (part of server-toolkit)
+#
+# Answers "are there recent log events worth looking at?" - it is
+# deliberately NOT a log viewer. Strictly read-only: every journalctl call
+# is time-window-bounded and timeout-wrapped; nothing here ever vacuums,
+# rotates, flushes, or otherwise changes journal/service state. Journal
+# message text is data only - printed, never evaluated or executed.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
+
+# shellcheck source=../lib/common.sh
+source "${LIB_DIR}/common.sh"
+# shellcheck source=../lib/services.sh
+source "${LIB_DIR}/services.sh"
+# shellcheck source=../lib/logs.sh
+source "${LIB_DIR}/logs.sh"
+
+# Configurable, documented alert thresholds (not server-specific values).
+WARNING_ALERT_THRESHOLD=50   # warning-level entries in the window
+MAX_RECENT_EVENTS=10
+MESSAGE_MAX_LEN=80
+SINCE="$LOGS_DEFAULT_SINCE"
+
+alerts=()
+
+# ------------------------------------------------------------ LOG SUMMARY ---
+print_header "LOG SUMMARY"
+
+journal_ok=0
+if journalctl_available; then
+    journal_ok=1
+    kv "Window" "Last 24 hours" 12
+    kv "Journal" "Available" 12
+else
+    kv "Window" "Last 24 hours" 12
+    kv "Journal" "N/A" 12
+fi
+printf '\n'
+
+# ----------------------------------------------------------------- ERRORS ---
+print_header "ERRORS"
+
+error_count="N/A"
+warning_count="N/A"
+if [[ "$journal_ok" -eq 1 ]]; then
+    error_count="$(get_journal_level_count "err..emerg" "$SINCE")" || error_count="N/A"
+    warning_count="$(get_journal_level_count "warning..warning" "$SINCE")" || warning_count="N/A"
+fi
+kv "Errors" "$error_count" 12
+kv "Warnings" "$warning_count" 12
+printf '\n'
+
+if [[ "$error_count" =~ ^[0-9]+$ && "$error_count" -gt 0 ]]; then
+    alerts+=("${error_count} error-level journal entries in the last 24h")
+fi
+if [[ "$warning_count" =~ ^[0-9]+$ && "$warning_count" -ge "$WARNING_ALERT_THRESHOLD" ]]; then
+    alerts+=("${warning_count} warning-level journal entries in the last 24h (>= ${WARNING_ALERT_THRESHOLD})")
+fi
+
+# --------------------------------------------------------- RECENT EVENTS ---
+print_header "RECENT EVENTS"
+
+if [[ "$journal_ok" -eq 1 ]] && events="$(get_recent_journal_events "$SINCE" "$MAX_RECENT_EVENTS")"; then
+    if [[ -n "$events" ]]; then
+        printf '%-20s %-24s %-8s %s\n' "TIME" "SOURCE" "PRI" "MESSAGE"
+        while IFS='|' read -r ts unit prio msg; do
+            [[ -z "$ts" ]] && continue
+            printf '%-20s %-24s %-8s %s\n' "$ts" "${unit:-N/A}" "${prio:-N/A}" "$(truncate_text "$msg" "$MESSAGE_MAX_LEN")"
+        done <<<"$events"
+    else
+        printf 'None\n'
+    fi
+else
+    printf 'N/A\n'
+fi
+printf '\n'
+
+# -------------------------------------------------------- FAILED SERVICES ---
+print_header "FAILED SERVICES"
+
+if systemd_available; then
+    failed_units="$(get_failed_service_units)" || failed_units=""
+    failed_count=0
+    [[ -n "$failed_units" ]] && failed_count="$(wc -l <<<"$failed_units" | tr -d '[:space:]')"
+    kv "Count" "$failed_count" 12
+    [[ "$failed_count" -gt 0 ]] && alerts+=("${failed_count} failed systemd service(s)")
+else
+    kv "Count" "N/A" 12
+fi
+printf '\n'
+
+# ---------------------------------------------------------------- KERNEL ---
+print_header "KERNEL"
+
+kernel_count="N/A"
+if [[ "$journal_ok" -eq 1 ]]; then
+    kernel_count="$(get_kernel_event_count "$SINCE")" || kernel_count="N/A"
+fi
+kv "Errors/warnings" "$kernel_count" 18
+printf '\n'
+
+# ----------------------------------------------------------------- ALERTS ---
+print_header "ALERTS"
+if [[ "${#alerts[@]}" -eq 0 ]]; then
+    printf '\xe2\x9c\x93 No recent log anomalies\n'
+else
+    for a in "${alerts[@]}"; do
+        printf '\xe2\x9a\xa0 %s\n' "$a"
+    done
+fi

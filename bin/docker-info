@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+# docker-info - Docker diagnostics dashboard (part of server-toolkit)
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
+
+# shellcheck source=../lib/common.sh
+source "${LIB_DIR}/common.sh"
+# shellcheck source=../lib/system.sh
+source "${LIB_DIR}/system.sh"
+# shellcheck source=../lib/docker.sh
+source "${LIB_DIR}/docker.sh"
+
+# Configurable alert thresholds (not server-specific values).
+RESTART_ALERT_THRESHOLD=3
+DOCKER_DISK_ALERT_BYTES=$(( 50 * 1024 * 1024 * 1024 )) # 50 GiB
+
+alerts=()
+
+# ---------------------------------------------------------------- DOCKER ---
+print_header "DOCKER"
+
+if ! docker_available; then
+    kv "Daemon" "unavailable"
+    alerts+=("Docker daemon unavailable")
+    printf '\n'
+    print_header "ALERTS"
+    for a in "${alerts[@]}"; do
+        printf '\xe2\x9a\xa0 %s\n' "$a"
+    done
+    exit 0
+fi
+
+docker_version="$(get_docker_version)"
+compose_version="$(get_compose_version)"
+read -r running total <<<"$(get_docker_container_counts)"
+read -r images_total volumes_total <<<"$(get_docker_disk_counts)"
+network_count="$(get_docker_network_count)"
+
+kv "Version" "${docker_version:-N/A}"
+[[ -n "$compose_version" ]] && kv "Compose" "v${compose_version#v}"
+kv "Daemon" "Running"
+kv "Containers" "${running}/${total} running / total"
+kv "Images" "$images_total"
+kv "Volumes" "$volumes_total"
+kv "Networks" "$network_count"
+printf '\n'
+
+# ------------------------------------------------------------- CONTAINERS ---
+print_header "CONTAINERS"
+
+if collect_docker_containers && [[ "${#DOCKER_NAMES[@]}" -gt 0 ]]; then
+    printf '%-20s %-14s %-14s %-8s %-10s %s\n' "NAME" "STATUS" "HEALTH" "CPU" "MEM" "MEM%"
+    for name in "${DOCKER_NAMES[@]}"; do
+        printf '%-20s %-14s %-14s %-8s %-10s %s\n' \
+            "$name" "${DOCKER_STATUS[$name]}" "${DOCKER_HEALTH[$name]}" \
+            "${DOCKER_CPU[$name]}" "${DOCKER_MEM[$name]}" "${DOCKER_MEMPCT[$name]}"
+    done
+else
+    printf 'None\n'
+fi
+printf '\n'
+
+# ---------------------------------------------------------- RESOURCE USAGE ---
+print_header "RESOURCE USAGE"
+
+if [[ -n "${DOCKER_TOTAL_CPU_PCT:-}" ]]; then
+    kv "Container CPU" "${DOCKER_TOTAL_CPU_PCT}%"
+else
+    kv "Container CPU" "N/A"
+fi
+
+if [[ -n "${DOCKER_TOTAL_MEM_BYTES:-}" ]]; then
+    kv "Container Memory" "$(bytes_to_human "$DOCKER_TOTAL_MEM_BYTES")"
+else
+    kv "Container Memory" "N/A"
+fi
+
+read -r ram_used ram_total ram_pct <<<"$(get_ram_stats)"
+if [[ "$ram_total" =~ ^[0-9]+$ ]]; then
+    kv "Host RAM" "$(bytes_to_human "$ram_used") / $(bytes_to_human "$ram_total") (${ram_pct})"
+else
+    kv "Host RAM" "N/A"
+fi
+
+docker_disk_total_bytes=0
+if df_lines="$(get_docker_disk_usage_lines)" && [[ -n "$df_lines" ]]; then
+    disk_summary=""
+    while IFS='|' read -r dtype dsize _dreclaim; do
+        [[ -z "$dtype" ]] && continue
+        disk_summary+="${disk_summary:+, }${dtype} ${dsize}"
+        dbytes="$(docker_size_to_bytes "$dsize")" || dbytes=0
+        docker_disk_total_bytes=$(( docker_disk_total_bytes + dbytes ))
+    done <<<"$df_lines"
+    kv "Docker disk" "$disk_summary"
+else
+    kv "Docker disk" "N/A"
+fi
+printf '\n'
+
+# -------------------------------------------------------------- RESTARTS ---
+print_header "RESTARTS"
+
+restart_found=0
+if [[ "${#DOCKER_NAMES[@]}" -gt 0 ]]; then
+    for name in "${DOCKER_NAMES[@]}"; do
+        restarts="${DOCKER_RESTARTS[$name]}"
+        if [[ "$restarts" =~ ^[0-9]+$ ]] && [[ "$restarts" -gt 0 ]]; then
+            printf '%-20s %s\n' "$name" "$restarts"
+            restart_found=1
+            [[ "$restarts" -ge "$RESTART_ALERT_THRESHOLD" ]] && \
+                alerts+=("Container '${name}' has restarted ${restarts} times")
+        fi
+    done
+fi
+[[ "$restart_found" -eq 0 ]] && printf 'None\n'
+printf '\n'
+
+# ---------------------------------------------------------------- HEALTH ---
+print_header "HEALTH"
+
+healthy_count=0 unhealthy_count=0 starting_count=0 nocheck_count=0
+for name in "${DOCKER_NAMES[@]}"; do
+    case "${DOCKER_HEALTH[$name]}" in
+        healthy) (( healthy_count++ )) || true ;;
+        unhealthy) (( unhealthy_count++ )) || true ;;
+        starting) (( starting_count++ )) || true ;;
+        *) (( nocheck_count++ )) || true ;;
+    esac
+done
+
+kv "Healthy" "$healthy_count"
+kv "Unhealthy" "$unhealthy_count"
+kv "Starting" "$starting_count"
+kv "No check" "$nocheck_count"
+[[ "$unhealthy_count" -gt 0 ]] && alerts+=("${unhealthy_count} unhealthy container(s)")
+printf '\n'
+
+# -------------------------------------------------------------- NETWORKS ---
+print_header "NETWORKS"
+
+if net_lines="$(get_docker_network_lines)" && [[ -n "$net_lines" ]]; then
+    printf '%-20s %-12s %s\n' "NETWORK" "DRIVER" "CONTAINERS"
+    while IFS='|' read -r nname ndriver ncount; do
+        [[ -z "$nname" ]] && continue
+        printf '%-20s %-12s %s\n' "$nname" "$ndriver" "$ncount"
+    done <<<"$net_lines"
+else
+    printf 'None\n'
+fi
+printf '\n'
+
+# --------------------------------------------------------------- VOLUMES ---
+print_header "VOLUMES"
+
+if vol_lines="$(get_docker_volume_lines)" && [[ -n "$vol_lines" ]]; then
+    printf '%-38s %s\n' "NAME" "DRIVER"
+    while IFS='|' read -r vname vdriver; do
+        [[ -z "$vname" ]] && continue
+        printf '%-38s %s\n' "$vname" "$vdriver"
+    done <<<"$vol_lines"
+else
+    printf 'None\n'
+fi
+printf '\n'
+
+# ---------------------------------------------------------------- IMAGES ---
+print_header "IMAGES"
+
+kv "Total images" "$images_total"
+images_size="$(awk -F'|' '$1=="Images"{print $2}' <<<"$df_lines")"
+kv "Docker disk usage" "${images_size:-N/A}"
+
+if top_images="$(get_docker_largest_images 3)" && [[ -n "$top_images" ]]; then
+    printf '\n'
+    printf 'Largest images:\n'
+    while IFS=$'\t' read -r repo size; do
+        [[ -z "$repo" ]] && continue
+        printf '  %-45s %s\n' "$repo" "$size"
+    done <<<"$top_images"
+fi
+printf '\n'
+
+# ---------------------------------------------------------------- ALERTS ---
+if [[ "$running" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ && "$running" -lt "$total" ]]; then
+    alerts+=("$(( total - running )) container(s) not running (${running}/${total})")
+fi
+if [[ "$docker_disk_total_bytes" -ge "$DOCKER_DISK_ALERT_BYTES" ]]; then
+    alerts+=("Docker storage usage is unusually large ($(bytes_to_human "$docker_disk_total_bytes"))")
+fi
+
+print_header "ALERTS"
+if [[ "${#alerts[@]}" -eq 0 ]]; then
+    printf '\xe2\x9c\x93 Docker healthy\n'
+else
+    for a in "${alerts[@]}"; do
+        printf '\xe2\x9a\xa0 %s\n' "$a"
+    done
+fi

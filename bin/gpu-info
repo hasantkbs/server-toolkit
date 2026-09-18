@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# gpu-info - standalone GPU status command (part of server-toolkit)
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
+
+# shellcheck source=../lib/common.sh
+source "${LIB_DIR}/common.sh"
+# shellcheck source=../lib/gpu.sh
+source "${LIB_DIR}/gpu.sh"
+
+print_header "GPU INFO"
+
+if ! gpu_list="$(get_gpu_list)" || [[ -z "$gpu_list" ]]; then
+    printf 'GPU: N/A\n'
+    exit 0
+fi
+
+gpu_count="$(wc -l <<<"$gpu_list" | tr -d '[:space:]')"
+
+first=1
+while IFS=',' read -r idx name driver util mem_used mem_total temp power_draw power_limit; do
+    [[ -z "${idx:-}" ]] && continue
+
+    idx="$(gpu_trim "$idx")"
+    name="$(gpu_trim "$name")"
+    driver="$(gpu_trim "$driver")"
+    util="$(gpu_clean_field "$util")"
+    mem_used="$(gpu_clean_field "$mem_used")"
+    mem_total="$(gpu_clean_field "$mem_total")"
+    temp="$(gpu_clean_field "$temp")"
+    power_draw="$(gpu_clean_field "$power_draw")"
+    power_limit="$(gpu_clean_field "$power_limit")"
+
+    [[ "$util" != "N/A" ]] && util="${util}%"
+    [[ "$temp" != "N/A" ]] && temp="${temp}C"
+
+    if [[ "$mem_used" != "N/A" && "$mem_total" != "N/A" ]]; then
+        vram="${mem_used} MiB / ${mem_total} MiB"
+    else
+        vram="N/A"
+    fi
+
+    if [[ "$power_draw" != "N/A" && "$power_limit" != "N/A" ]]; then
+        power="${power_draw}W / ${power_limit}W"
+    elif [[ "$power_draw" != "N/A" ]]; then
+        power="${power_draw}W"
+    else
+        power="N/A"
+    fi
+
+    if [[ "$gpu_count" -gt 1 ]]; then
+        [[ "$first" -eq 0 ]] && printf '\n'
+        printf 'GPU %s\n' "$idx"
+    fi
+
+    kv "GPU" "$name" 13
+    kv "Driver" "$driver" 13
+    kv "Utilization" "$util" 13
+    kv "VRAM" "$vram" 13
+    kv "Temperature" "$temp" 13
+    kv "Power" "$power" 13
+
+    first=0
+done <<<"$gpu_list"
+
+printf '\n'
+print_header "PROCESSES"
+
+if procs="$(get_gpu_processes)" && [[ -n "$procs" ]]; then
+    while IFS=',' read -r pid pname pmem; do
+        [[ -z "${pid:-}" ]] && continue
+        pid="$(gpu_trim "$pid")"
+        pname="$(gpu_trim "$pname")"
+        pmem="$(gpu_clean_field "$pmem")"
+        [[ "$pmem" != "N/A" ]] && pmem="${pmem} MiB"
+        printf '%-8s%-24s%s\n' "$pid" "$pname" "$pmem"
+    done <<<"$procs"
+else
+    printf 'None\n'
+fi

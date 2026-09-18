@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# security-info - security posture dashboard (part of server-toolkit)
+#
+# Strictly read-only: ufw status, systemd unit status (ssh/sshd,
+# fail2ban.service, failed units), socket-based listener enumeration, and
+# one bounded journalctl read. Nothing here ever changes a firewall rule,
+# jail, service state, or file permission.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
+
+# shellcheck source=../lib/common.sh
+source "${LIB_DIR}/common.sh"
+# shellcheck source=../lib/services.sh
+source "${LIB_DIR}/services.sh"
+# shellcheck source=../lib/network.sh
+source "${LIB_DIR}/network.sh"
+# shellcheck source=../lib/security.sh
+source "${LIB_DIR}/security.sh"
+
+alerts=()
+
+# ------------------------------------------------------------------- UFW ---
+print_header "UFW"
+
+if ufw_raw="$(get_ufw_status_raw)" && [[ -n "$ufw_raw" ]]; then
+    IFS='|' read -r ufw_status ufw_in ufw_out ufw_logging <<<"$(parse_ufw_status "$ufw_raw")"
+    kv "Status" "$ufw_status" 14
+    kv "Default In" "$ufw_in" 14
+    kv "Default Out" "$ufw_out" 14
+    kv "Logging" "$ufw_logging" 14
+    [[ "$ufw_status" == "inactive" ]] && alerts+=("UFW is inactive")
+elif ufw_installed; then
+    printf 'N/A (inaccessible - try running as root)\n'
+else
+    printf 'N/A (not installed)\n'
+fi
+printf '\n'
+
+# ------------------------------------------------------------------- SSH ---
+print_header "SSH"
+
+ssh_unit="$(find_ssh_unit)"
+if [[ -n "$ssh_unit" ]]; then
+    props="$(get_unit_properties "$ssh_unit" "ActiveState")" || props=""
+    ssh_state="$(extract_prop "$props" ActiveState)"
+    ssh_port="$(detect_ssh_port)"
+
+    kv "Service" "$ssh_unit" 14
+    kv "Status" "${ssh_state:-N/A}" 14
+    kv "Port" "${ssh_port:-N/A}" 14
+    if [[ -n "$ssh_port" ]] && is_port_listening "$ssh_port"; then
+        kv "Listening" "yes" 14
+    elif [[ -n "$ssh_port" ]]; then
+        kv "Listening" "no" 14
+    else
+        kv "Listening" "N/A" 14
+    fi
+else
+    printf 'N/A\n'
+fi
+printf '\n'
+
+# ---------------------------------------------------------- AUTHENTICATION ---
+print_header "AUTHENTICATION"
+
+if auth_failures="$(get_recent_auth_failures)"; then
+    kv "Recent failures (24h)" "$auth_failures" 24
+    [[ "$auth_failures" =~ ^[0-9]+$ && "$auth_failures" -gt 0 ]] && \
+        alerts+=("Authentication failures detected in the last 24h (${auth_failures})")
+else
+    kv "Recent failures (24h)" "N/A" 24
+fi
+printf '\n'
+
+# --------------------------------------------------------- FAILED SERVICES ---
+print_header "FAILED SERVICES"
+
+if systemd_available; then
+    failed_units="$(get_failed_service_units)" || failed_units=""
+    failed_count=0
+    [[ -n "$failed_units" ]] && failed_count="$(wc -l <<<"$failed_units" | tr -d '[:space:]')"
+    kv "Count" "$failed_count" 14
+    [[ "$failed_count" -gt 0 ]] && alerts+=("${failed_count} failed systemd service(s)")
+else
+    kv "Count" "N/A" 14
+fi
+printf '\n'
+
+# ------------------------------------------------------------- FAIL2BAN ---
+print_header "FAIL2BAN"
+
+IFS='|' read -r f2b_installed f2b_status <<<"$(get_fail2ban_status)"
+kv "Installed" "$f2b_installed" 14
+if [[ "$f2b_installed" == "yes" ]]; then
+    kv "Status" "$f2b_status" 14
+    [[ "$f2b_status" != "active" ]] && alerts+=("fail2ban is installed but not active (status: ${f2b_status})")
+fi
+printf '\n'
+
+# ------------------------------------------------------- PUBLIC LISTENERS ---
+print_header "PUBLIC LISTENERS"
+
+public_count=0
+local_count=0
+if listen_lines="$(get_listening_ports)" && [[ -n "$listen_lines" ]]; then
+    public_lines="$(awk -F'|' '$4=="PUBLIC"' <<<"$listen_lines")"
+    local_count="$(awk -F'|' '$4=="LOCAL"' <<<"$listen_lines" | wc -l | tr -d '[:space:]')"
+
+    if [[ -n "$public_lines" ]]; then
+        public_count="$(wc -l <<<"$public_lines" | tr -d '[:space:]')"
+        printf '%-24s %s\n' "BIND:PORT" "PROCESS"
+        while IFS='|' read -r bind port proc _cat; do
+            [[ -z "$bind" ]] && continue
+            printf '%-24s %s\n' "${bind}:${port}" "$proc"
+        done <<<"$public_lines"
+    else
+        printf 'None\n'
+    fi
+else
+    printf 'N/A\n'
+fi
+printf '\n'
+kv "Public listeners" "$public_count" 24
+kv "Local-only listeners" "$local_count" 24
+printf '\n'
+
+# ----------------------------------------------------------------- ALERTS ---
+print_header "ALERTS"
+if [[ "${#alerts[@]}" -eq 0 ]]; then
+    printf '\xe2\x9c\x93 Security healthy\n'
+else
+    for a in "${alerts[@]}"; do
+        printf '\xe2\x9a\xa0 %s\n' "$a"
+    done
+fi

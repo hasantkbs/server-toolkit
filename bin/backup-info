@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# backup-info - generic, read-only backup discovery/status dashboard
+# (part of server-toolkit)
+#
+# Answers "do I have observable backup information, and is it recent
+# enough?" - strictly diagnostic. Never creates, restores, deletes, copies,
+# moves, compresses, dumps, exports, or uploads anything, and never
+# executes a command discovered in cron/systemd configuration. This
+# command is deliberately generic: it assumes nothing about this specific
+# server's backup layout (no hard-coded directories, databases, volumes,
+# app names, hosts, or filenames) - only OS-level conventions
+# (/var/backups) and keyword-based discovery (backup/snapshot/dump).
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
+
+# shellcheck source=../lib/common.sh
+source "${LIB_DIR}/common.sh"
+# shellcheck source=../lib/services.sh
+source "${LIB_DIR}/services.sh"
+# shellcheck source=../lib/backup.sh
+source "${LIB_DIR}/backup.sh"
+
+# Configurable, documented, server-independent default. Not chosen based on
+# this server's own backup cadence - a future configuration system may
+# override it per backup source.
+BACKUP_STALE_HOURS=24
+
+alerts=()
+
+# There is no configuration engine yet (Sprint 9 scope); "configured"
+# sources will always be 0 until one exists. Kept as an explicit, honestly-
+# labeled field now so the output shape doesn't need to change later.
+configured_count=0
+
+# ------------------------------------------------------------- DISCOVERY ---
+timers="$(get_backup_related_timers)" || timers=""
+timer_count=0
+[[ -n "$timers" ]] && timer_count="$(wc -l <<<"$timers" | tr -d '[:space:]')"
+
+cron_entries="$(get_backup_related_cron_entries)" || cron_entries=""
+cron_count=0
+[[ -n "$cron_entries" ]] && cron_count="$(wc -l <<<"$cron_entries" | tr -d '[:space:]')"
+
+local_dirs="$(get_local_backup_candidates)" || local_dirs=""
+local_count=0
+[[ -n "$local_dirs" ]] && local_count="$(wc -l <<<"$local_dirs" | tr -d '[:space:]')"
+
+discovered_count=$(( timer_count + cron_count + local_count ))
+
+# --------------------------------------------------------- BACKUP STATUS ---
+print_header "BACKUP STATUS"
+kv "Configured sources" "$configured_count" 22
+kv "Discovered sources" "$discovered_count" 22
+if [[ "$discovered_count" -eq 0 ]]; then
+    printf '\n'
+    printf 'No configured/discoverable backup sources\n'
+    printf 'Configure a backup source to enable freshness monitoring.\n'
+    printf '\n'
+    print_header "ALERTS"
+    printf '\xe2\x9c\x93 No backup anomalies\n'
+    exit 0
+fi
+printf '\n'
+
+# ------------------------------------------------------------- BACKUPS ---
+print_header "BACKUPS"
+
+if [[ "$local_count" -gt 0 ]]; then
+    printf '%-24s %-10s %-20s %s\n' "NAME" "STATUS" "LAST BACKUP" "AGE"
+    while IFS='|' read -r dir file mtime; do
+        [[ -z "$dir" ]] && continue
+        IFS='|' read -r age_str age_hours <<<"$(backup_age_from_epoch "$mtime")"
+        last_backup="N/A"
+        [[ "$mtime" =~ ^[0-9]+$ ]] && last_backup="$(date -d "@${mtime}" '+%Y-%m-%d %H:%M' 2>/dev/null || printf 'N/A')"
+
+        status="unknown"
+        if [[ -n "$age_hours" ]]; then
+            if [[ "$age_hours" -ge "$BACKUP_STALE_HOURS" ]]; then
+                status="stale"
+                alerts+=("Backup source '${dir}' is older than ${BACKUP_STALE_HOURS}h (age: ${age_str})")
+            else
+                status="fresh"
+            fi
+        fi
+
+        printf '%-24s %-10s %-20s %s\n' "${dir}/${file}" "$status" "$last_backup" "$age_str"
+    done <<<"$local_dirs"
+else
+    printf 'None\n'
+fi
+printf '\n'
+
+# ------------------------------------------------------------ SCHEDULES ---
+print_header "SCHEDULES"
+
+schedule_found=0
+if [[ "$timer_count" -gt 0 ]]; then
+    while IFS='|' read -r unit _load active sub _desc; do
+        [[ -z "$unit" ]] && continue
+        [[ "$schedule_found" -eq 0 ]] && printf '%-32s %-14s %s\n' "NAME" "TYPE" "STATUS"
+        printf '%-32s %-14s %s\n' "$unit" "systemd-timer" "${active:-N/A}/${sub:-N/A}"
+        schedule_found=1
+    done <<<"$timers"
+fi
+if [[ "$cron_count" -gt 0 ]]; then
+    while IFS='|' read -r schedule summary source; do
+        [[ -z "$schedule" ]] && continue
+        [[ "$schedule_found" -eq 0 ]] && printf '%-32s %-14s %s\n' "NAME" "TYPE" "STATUS"
+        printf '%-32s %-14s %s\n' "${summary:-N/A} (${schedule})" "cron" "observed (${source})"
+        schedule_found=1
+    done <<<"$cron_entries"
+fi
+[[ "$schedule_found" -eq 0 ]] && printf 'None\n'
+printf '\n'
+
+# ----------------------------------------------------------------- ALERTS ---
+print_header "ALERTS"
+if [[ "${#alerts[@]}" -eq 0 ]]; then
+    printf '\xe2\x9c\x93 No backup anomalies\n'
+else
+    for a in "${alerts[@]}"; do
+        printf '\xe2\x9a\xa0 %s\n' "$a"
+    done
+fi

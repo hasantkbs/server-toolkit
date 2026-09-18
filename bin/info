@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+# info - fast "at-a-glance" server dashboard (part of server-toolkit)
+#
+# Every section here uses only single-shot, already-fast data sources: the
+# same ones info has always used, plus a handful of individual bounded
+# calls reused from the newer services/process/logs helpers (one systemd
+# query, one ps snapshot, one timeout-guarded journalctl count - not their
+# full logic). Deep/expensive diagnostics - storage-info's directory scans,
+# logs-info's full recent-event/kernel breakdown, backup-info's discovery,
+# and the full detail behind docker-info/network-info/security-info/
+# process-info - intentionally stay in their own dedicated commands; info
+# never calls them.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
+
+# shellcheck source=../lib/common.sh
+source "${LIB_DIR}/common.sh"
+# shellcheck source=../lib/system.sh
+source "${LIB_DIR}/system.sh"
+# shellcheck source=../lib/gpu.sh
+source "${LIB_DIR}/gpu.sh"
+# shellcheck source=../lib/services.sh
+source "${LIB_DIR}/services.sh"
+# shellcheck source=../lib/process.sh
+source "${LIB_DIR}/process.sh"
+# shellcheck source=../lib/logs.sh
+source "${LIB_DIR}/logs.sh"
+# shellcheck source=../lib/status.sh
+source "${LIB_DIR}/status.sh"
+
+# Configurable, documented alert thresholds (not server-specific values).
+# Centralized here so a future configuration layer can override them
+# per-section without touching the logic below.
+DISK_ALERT_PCT=80
+RAM_ALERT_PCT=90
+SWAP_ALERT_PCT=10
+CPU_ALERT_THRESHOLD=90       # kept aligned with process-info's own default
+LOG_ERROR_LOOKBACK="24 hours ago"
+LOG_ERROR_TIMEOUT=1          # seconds; a slow/hung journal just skips this one optional check
+
+# shellcheck disable=SC2034 # populated via add_alert (nameref) and read via render_alerts
+alerts=()
+
+strip_pct() {
+    local v="${1:-}"
+    v="${v%\%}"
+    [[ "$v" =~ ^[0-9]+$ ]] && printf '%s' "$v" || printf ''
+}
+
+# ---------------------------------------------------------------- SERVER ---
+print_header "SERVER"
+kv "hostname" "$(get_hostname)"
+kv "OS" "$(get_os_pretty_name)"
+kv "kernel" "$(get_kernel_version)"
+kv "uptime" "$(get_uptime_human)"
+kv "load" "$(get_load_average)"
+printf '\n'
+
+# ---------------------------------------------------------------- SYSTEM ---
+print_header "SYSTEM"
+kv "CPU" "$(get_cpu_model) ($(get_cpu_topology))"
+
+read -r ram_used ram_total ram_pct <<<"$(get_ram_stats)"
+if [[ "$ram_total" =~ ^[0-9]+$ ]]; then
+    kv "RAM" "$(bytes_to_human "$ram_used") / $(bytes_to_human "$ram_total") (${ram_pct})"
+else
+    kv "RAM" "N/A"
+fi
+
+read -r swap_used swap_total swap_pct <<<"$(get_swap_stats)"
+if [[ "$swap_total" =~ ^[0-9]+$ ]] && [[ "$swap_total" -gt 0 ]]; then
+    kv "SWAP" "$(bytes_to_human "$swap_used") / $(bytes_to_human "$swap_total") (${swap_pct})"
+elif [[ "$swap_total" == "0" ]]; then
+    kv "SWAP" "none configured"
+else
+    kv "SWAP" "N/A"
+fi
+
+read -r disk_used disk_total disk_pct <<<"$(get_disk_stats)"
+if [[ "$disk_total" =~ ^[0-9]+$ ]]; then
+    kv "DISK" "$(bytes_to_human "$disk_used") / $(bytes_to_human "$disk_total") (${disk_pct})"
+else
+    kv "DISK" "N/A"
+fi
+printf '\n'
+
+# ------------------------------------------------------------------ GPU ---
+print_header "GPU"
+if gpu_list="$(get_gpu_list)" && [[ -n "$gpu_list" ]]; then
+    # shellcheck disable=SC2034 # driver/temp/power fields unused in this summary view
+    while IFS=',' read -r idx name driver util mem_used mem_total temp power_draw power_limit; do
+        [[ -z "${idx:-}" ]] && continue
+        name="$(gpu_trim "$name")"
+        util="$(gpu_clean_field "$util")"
+        mem_used="$(gpu_clean_field "$mem_used")"
+        mem_total="$(gpu_clean_field "$mem_total")"
+        [[ "$util" != "N/A" ]] && util="${util}%"
+        if [[ "$mem_used" != "N/A" && "$mem_total" != "N/A" ]]; then
+            vram="${mem_used} MiB / ${mem_total} MiB"
+        else
+            vram="N/A"
+        fi
+        kv "model" "$name"
+        kv "utilization" "$util"
+        kv "VRAM" "$vram"
+    done <<<"$gpu_list"
+else
+    printf 'N/A\n'
+fi
+printf '\n'
+
+# -------------------------------------------------------------- NETWORK ---
+print_header "NETWORK"
+iface="$(get_primary_interface)"
+if [[ -n "$iface" ]]; then
+    iface_state="$(get_interface_state "$iface")"
+    kv "primary interface" "$iface"
+    kv "state" "$iface_state"
+    kv "link speed" "$(get_link_speed "$iface")"
+    ipv4="$(get_ipv4_address "$iface")"
+    kv "IPv4" "${ipv4:-N/A}"
+    if [[ "$iface_state" != "up" ]]; then
+        add_alert alerts WARN network "Primary network interface '${iface}' is not up (state: ${iface_state})"
+    fi
+else
+    printf 'N/A (no default route found)\n'
+fi
+printf '\n'
+
+# --------------------------------------------------------------- DOCKER ---
+print_header "DOCKER"
+docker_version="$(get_docker_version)"
+if [[ -n "$docker_version" ]]; then
+    kv "version" "$docker_version"
+    read -r running total <<<"$(get_docker_container_counts)"
+    kv "containers" "${running}/${total} running"
+    healthy="$(get_docker_healthy_count)"
+    [[ -n "$healthy" ]] && kv "healthy" "$healthy"
+
+    if [[ "$running" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ && "$running" -lt "$total" ]]; then
+        add_alert alerts WARN docker "Docker: $(( total - running )) container(s) not running (${running}/${total})"
+    fi
+    unhealthy="$(get_docker_unhealthy_count)"
+    [[ "$unhealthy" =~ ^[0-9]+$ && "$unhealthy" -gt 0 ]] && \
+        add_alert alerts WARN docker "Docker: ${unhealthy} unhealthy container(s)"
+else
+    printf 'unavailable\n'
+    add_alert alerts ERROR docker "Docker daemon is unavailable"
+fi
+printf '\n'
+
+# ------------------------------------------------------------- SERVICES ---
+print_header "SERVICES"
+if systemd_available; then
+    all_units="$(get_all_service_units)" || all_units=""
+    running_count=0
+    [[ -n "$all_units" ]] && running_count="$(awk -F'|' '$3=="active"' <<<"$all_units" | wc -l | tr -d '[:space:]')"
+
+    failed_units="$(get_failed_service_units)" || failed_units=""
+    failed_count=0
+    [[ -n "$failed_units" ]] && failed_count="$(wc -l <<<"$failed_units" | tr -d '[:space:]')"
+
+    kv "Running" "$running_count"
+    kv "Failed" "$failed_count"
+
+    [[ "$failed_count" -gt 0 ]] && add_alert alerts WARN services "${failed_count} failed systemd service(s)"
+else
+    kv "Running" "N/A"
+    kv "Failed" "N/A"
+fi
+printf '\n'
+
+# ------------------------------------------------------------- SECURITY ---
+print_header "SECURITY"
+ufw_status="$(get_ufw_status)"
+if [[ -n "$ufw_status" ]]; then
+    kv "UFW" "$ufw_status"
+    [[ "$ufw_status" == "inactive" ]] && add_alert alerts WARN security "UFW firewall is inactive"
+fi
+
+reboot_required="$(get_reboot_required)"
+kv "reboot required" "$reboot_required"
+printf '\n'
+
+# -------------------------------------------------------------- ALERTS ---
+disk_pct_num="$(strip_pct "$disk_pct")"
+[[ -n "$disk_pct_num" && "$disk_pct_num" -ge "$DISK_ALERT_PCT" ]] && \
+    add_alert alerts WARN system "Root disk usage is ${disk_pct}"
+
+ram_pct_num="$(strip_pct "$ram_pct")"
+[[ -n "$ram_pct_num" && "$ram_pct_num" -ge "$RAM_ALERT_PCT" ]] && \
+    add_alert alerts WARN system "RAM usage is ${ram_pct}"
+
+swap_pct_num="$(strip_pct "$swap_pct")"
+if [[ -n "$swap_pct_num" && "$swap_pct_num" -ge "$SWAP_ALERT_PCT" ]]; then
+    add_alert alerts WARN system "Swap usage is ${swap_pct} (${swap_used} bytes used)"
+fi
+
+# High CPU: a single bounded ps snapshot (process.sh), not process-info's
+# full report - just the one threshold count.
+if snapshot="$(get_process_snapshot)" && [[ -n "$snapshot" ]]; then
+    high_cpu_count="$(count_above_threshold "$snapshot" 4 "$CPU_ALERT_THRESHOLD")"
+    [[ "$high_cpu_count" =~ ^[0-9]+$ && "$high_cpu_count" -gt 0 ]] && \
+        add_alert alerts WARN process "${high_cpu_count} process(es) above ${CPU_ALERT_THRESHOLD}% CPU"
+fi
+
+# Error-level logs: a single timeout-guarded journalctl count (logs.sh),
+# not logs-info's recent-events/kernel/warning breakdown.
+if journalctl_available; then
+    error_count="$(get_journal_level_count "err..emerg" "$LOG_ERROR_LOOKBACK" "$LOG_ERROR_TIMEOUT")" || error_count=""
+    [[ "$error_count" =~ ^[0-9]+$ && "$error_count" -gt 0 ]] && \
+        add_alert alerts WARN logs "${error_count} error-level journal entries in the last 24h"
+fi
+
+print_header "ALERTS"
+render_alerts alerts "No active alerts"
