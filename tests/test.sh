@@ -3162,6 +3162,43 @@ fi
 
 rm -rf "$CFG_TMP"
 
+echo "== configuration engine: info uses a configured RAM alert threshold =="
+CFG_TMP2="$(mktemp -d)"
+mkdir -p "${CFG_TMP2}/info-low"
+printf 'RAM_ALERT_PCT=1\n' > "${CFG_TMP2}/info-low/config"
+chmod 600 "${CFG_TMP2}/info-low/config"
+if TOOLKIT_CONFIG_DIR="${CFG_TMP2}/info-low" "${BIN_DIR}/info" >/tmp/toolkit_test_info_lowram.out 2>/tmp/toolkit_test_info_lowram.err; then
+    if grep -q "RAM usage is" /tmp/toolkit_test_info_lowram.out; then
+        ok "info fires a RAM alert when the configured threshold (1%) is below actual usage"
+    else
+        bad "info did not fire a RAM alert with RAM_ALERT_PCT=1 (actual RAM usage should always exceed 1%)"
+    fi
+else
+    bad "info exited non-zero with a config file present: $(cat /tmp/toolkit_test_info_lowram.err)"
+fi
+
+echo "== configuration engine: info's default RAM alert threshold is unchanged without a config file =="
+actual_ram_pct="$(bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/system.sh"
+    read -r _ _ pct <<<"$(get_ram_stats)"
+    printf "%s" "${pct%\%}"
+')"
+if TOOLKIT_CONFIG_DIR="${CFG_TMP2}/does-not-exist" "${BIN_DIR}/info" >/tmp/toolkit_test_info_nocfg.out 2>/tmp/toolkit_test_info_nocfg.err; then
+    expect_alert=0
+    [[ "$actual_ram_pct" =~ ^[0-9]+$ ]] && [[ "$actual_ram_pct" -ge 90 ]] && expect_alert=1
+    found_alert=0
+    grep -q "RAM usage is" /tmp/toolkit_test_info_nocfg.out && found_alert=1
+    if [[ "$expect_alert" -eq "$found_alert" ]]; then
+        ok "info's default RAM alert threshold (90%) is unchanged without a config file"
+    else
+        bad "info's default RAM alert behavior changed (actual RAM ${actual_ram_pct}%, alert present: ${found_alert})"
+    fi
+else
+    bad "info exited non-zero with no config file: $(cat /tmp/toolkit_test_info_nocfg.err)"
+fi
+rm -rf "$CFG_TMP2"
+
 echo
 echo "Results: ${pass} passed, ${fail} failed"
 [[ "$fail" -eq 0 ]]

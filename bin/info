@@ -29,12 +29,16 @@ source "${LIB_DIR}/process.sh"
 source "${LIB_DIR}/logs.sh"
 # shellcheck source=../lib/status.sh
 source "${LIB_DIR}/status.sh"
+# shellcheck source=../lib/config.sh
+source "${LIB_DIR}/config.sh"
 
 # Configurable, documented alert thresholds (not server-specific values).
 # Centralized here so a future configuration layer can override them
-# per-section without touching the logic below.
+# per-section without touching the logic below. RAM_ALERT_PCT is the
+# first one actually wired to lib/config.sh (see docs/config.md) - the
+# rest stay plain constants until a future sprint connects them too.
 DISK_ALERT_PCT=80
-RAM_ALERT_PCT=90
+RAM_ALERT_PCT="$(config_get RAM_ALERT_PCT 90 percentage)"
 SWAP_ALERT_PCT=10
 CPU_ALERT_THRESHOLD=90       # kept aligned with process-info's own default
 LOG_ERROR_LOOKBACK="24 hours ago"
