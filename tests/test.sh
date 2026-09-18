@@ -3436,6 +3436,181 @@ fi
 
 rm -rf "$MOD_TMP"
 
+echo "== custom modules: disabled module never executes =="
+MOD_TMP2="$(mktemp -d)"
+rm -f /tmp/module-pwned-disabled
+mkdir -p "${MOD_TMP2}/disabled/modules"
+printf 'ENABLED=false\nCOMMAND=touch /tmp/module-pwned-disabled\n' > "${MOD_TMP2}/disabled/modules/off.conf"
+chmod 600 "${MOD_TMP2}/disabled/modules/off.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/disabled" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module off
+')"
+if [[ ! -e /tmp/module-pwned-disabled ]] && [[ "$result" == "${STATUS_OK:-OK}"$'\t'*"disabled"* || "$result" == *"disabled"* ]]; then
+    ok "a disabled module never runs its COMMAND"
+else
+    bad "SECURITY: a disabled module's COMMAND executed, or status was wrong (result: '$result')"
+fi
+rm -f /tmp/module-pwned-disabled
+
+echo "== custom modules: enabled module executes =="
+mkdir -p "${MOD_TMP2}/enabled/modules"
+printf 'ENABLED=true\nCOMMAND=touch /tmp/module-pwned-executed && echo did-run\n' > "${MOD_TMP2}/enabled/modules/on.conf"
+chmod 600 "${MOD_TMP2}/enabled/modules/on.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/enabled" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module on
+')"
+if [[ -e /tmp/module-pwned-executed ]] && [[ "$result" == *"did-run"* ]]; then
+    ok "an explicitly enabled module runs its COMMAND and captures its output"
+else
+    bad "an enabled module did not execute correctly (result: '$result')"
+fi
+rm -f /tmp/module-pwned-executed
+
+echo "== custom modules: module timeout =="
+mkdir -p "${MOD_TMP2}/timeout/modules"
+printf 'ENABLED=true\nCOMMAND=sleep 5\nTIMEOUT=1\n' > "${MOD_TMP2}/timeout/modules/slow.conf"
+chmod 600 "${MOD_TMP2}/timeout/modules/slow.conf"
+start_ts=$(date +%s)
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/timeout" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module slow
+')"
+end_ts=$(date +%s)
+elapsed=$(( end_ts - start_ts ))
+if [[ "$result" == *"timed out"* ]] && [[ "$elapsed" -lt 4 ]]; then
+    ok "a module exceeding its TIMEOUT is killed promptly (elapsed ${elapsed}s) and reported as timed out"
+else
+    bad "module timeout did not work as expected (elapsed ${elapsed}s, result: '$result')"
+fi
+
+echo "== custom modules: module non-zero exit =="
+mkdir -p "${MOD_TMP2}/nonzero/modules"
+printf 'ENABLED=true\nCOMMAND=exit 3\n' > "${MOD_TMP2}/nonzero/modules/fails.conf"
+chmod 600 "${MOD_TMP2}/nonzero/modules/fails.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/nonzero" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module fails
+')"
+[[ "$result" == *"non-zero (3)"* ]] && ok "a module exiting non-zero is reported with its exit code" \
+    || bad "non-zero exit was not reported correctly (result: '$result')"
+
+echo "== custom modules: module output truncation =="
+mkdir -p "${MOD_TMP2}/trunc/modules"
+printf 'ENABLED=true\nCOMMAND=head -c 100000 /dev/zero | tr "\\0" "A"\n' > "${MOD_TMP2}/trunc/modules/big.conf"
+chmod 600 "${MOD_TMP2}/trunc/modules/big.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/trunc" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module big
+')"
+output_field="${result#*$'\t'}"
+output_field="${output_field#*$'\t'}"
+if [[ "${#output_field}" -le 4096 ]] && [[ "${#output_field}" -gt 0 ]]; then
+    ok "a module producing 100000 bytes of output is capped at MODULE_OUTPUT_MAX_BYTES (got ${#output_field} bytes)"
+else
+    bad "module output was not correctly bounded (got ${#output_field} bytes)"
+fi
+
+echo "== custom modules: module stderr is captured too =="
+mkdir -p "${MOD_TMP2}/stderr/modules"
+printf 'ENABLED=true\nCOMMAND=echo oops-on-stderr >&2; exit 1\n' > "${MOD_TMP2}/stderr/modules/err.conf"
+chmod 600 "${MOD_TMP2}/stderr/modules/err.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/stderr" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module err
+')"
+[[ "$result" == *"oops-on-stderr"* ]] && ok "a module's stderr output is captured and reported" \
+    || bad "module stderr was not captured (result: '$result')"
+
+echo "== custom modules: missing command =="
+mkdir -p "${MOD_TMP2}/nocmd/modules"
+printf 'ENABLED=true\n' > "${MOD_TMP2}/nocmd/modules/empty.conf"
+chmod 600 "${MOD_TMP2}/nocmd/modules/empty.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/nocmd" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module empty
+')"
+[[ "$result" == *"no COMMAND configured"* ]] && ok "a module with no COMMAND field is reported, never executed" \
+    || bad "missing-command handling did not work (result: '$result')"
+
+echo "== custom modules: unknown module (not discovered) does not crash =="
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/nocmd" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module does-not-exist
+')"
+[[ "$result" == *"not found"* ]] && ok "running an unknown module name is reported cleanly, not a crash" \
+    || bad "unknown-module handling did not work (result: '$result')"
+
+echo "== custom modules: malicious-looking command string executes exactly as authored (expected, sanctioned) =="
+mkdir -p "${MOD_TMP2}/malicious/modules"
+printf 'ENABLED=true\nCOMMAND=echo first; echo second\n' > "${MOD_TMP2}/malicious/modules/multi.conf"
+chmod 600 "${MOD_TMP2}/malicious/modules/multi.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/malicious" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module multi
+')"
+[[ "$result" == *"first"*"second"* ]] && ok "a multi-command shell string in COMMAND runs exactly as written when the module is enabled (this is the feature, not a bug)" \
+    || bad "multi-command COMMAND string did not execute as expected (result: '$result')"
+
+echo "== custom modules: enabled module runs in a child process, not the current shell (no eval) =="
+mkdir -p "${MOD_TMP2}/isolation/modules"
+printf 'ENABLED=true\nCOMMAND=export CANARY_LEAK=leaked\n' > "${MOD_TMP2}/isolation/modules/leak.conf"
+chmod 600 "${MOD_TMP2}/isolation/modules/leak.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/isolation" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module leak >/dev/null
+    printf "leaked=%s\n" "${CANARY_LEAK:-not-leaked}"
+')"
+[[ "$result" == "leaked=not-leaked" ]] && ok "a module's own environment changes (export) never leak into the calling shell - proves child-process execution, not eval" \
+    || bad "SECURITY: a module's export leaked into the calling shell (result: '$result')"
+
+echo "== custom modules: multi-line/embedded-newline output does not break the STATUS/MESSAGE/OUTPUT contract =="
+mkdir -p "${MOD_TMP2}/newline/modules"
+printf 'ENABLED=true\nCOMMAND=printf "line1\\nline2\\n"\n' > "${MOD_TMP2}/newline/modules/nl.conf"
+chmod 600 "${MOD_TMP2}/newline/modules/nl.conf"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/newline" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module nl | wc -l
+')"
+[[ "$result" -eq 1 ]] && ok "a module whose output contains embedded newlines still produces exactly one result line" \
+    || bad "embedded newlines in module output broke the one-line contract (line count: $result)"
+
+rm -rf "$MOD_TMP2"
+
 echo
 echo "Results: ${pass} passed, ${fail} failed"
 [[ "$fail" -eq 0 ]]

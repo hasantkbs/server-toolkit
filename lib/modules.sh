@@ -123,3 +123,101 @@ read_module_file() {
     done <<<"$content"
     return 0
 }
+
+# ---------------------------------------------------------- global gate ---
+
+# True (exit 0) iff the custom-module system is turned on at all. Default
+# is off - with no config, info's runtime and output are unaffected by
+# anything in this file: this is the one check that gates all of it.
+modules_enabled() {
+    [[ "$(config_get CUSTOM_MODULES_ENABLED false boolean)" == "true" ]]
+}
+
+# Per-module timeout (seconds) used when a module's own TIMEOUT field is
+# absent or invalid. Configurable globally so a user with several slow
+# modules doesn't have to repeat the same TIMEOUT= line in every file.
+module_timeout_default() {
+    config_get CUSTOM_MODULE_TIMEOUT_DEFAULT 5 positive_integer
+}
+
+# ------------------------------------------------------------ execution ---
+
+# Runs one module by name. THE ONLY function in this codebase that ever
+# executes a module's COMMAND field - see the trust-boundary comment at
+# the top of this file. Prints exactly one line:
+#   STATUS<TAB>MESSAGE<TAB>OUTPUT
+# STATUS is one of lib/status.sh's STATUS_OK/STATUS_WARN/STATUS_ERROR/
+# STATUS_UNKNOWN. OUTPUT has embedded newlines/tabs collapsed to spaces
+# so it can never break this line-based contract. Never fails the caller
+# (always returns 0, even when the module itself errors/times out/is
+# unknown/disabled/malformed) - a bad module is a reportable condition,
+# not a script-ending error, matching this codebase's established
+# alerting pattern (compare lib/docker.sh, lib/services.sh).
+#
+# Execution itself: `timeout "$timeout_secs" bash -c "$command"`, output
+# piped through `head -c MODULE_OUTPUT_MAX_BYTES` so this process never
+# buffers more than that many bytes regardless of how much the module
+# writes. `bash -c` runs the command in a fresh child process - never
+# inline-executed in place, never this shell - so it cannot mutate
+# run_module's own variables/functions/shell options, and a hang is
+# killed by `timeout` without taking the caller down with it. GNU
+# `timeout`'s own exit code 124 means "killed for running too long" and
+# is treated as its own ERROR-level outcome, distinct from an ordinary
+# non-zero exit. `pipefail` is turned on inside the command
+# substitution's own subshell (not in run_module's or the caller's
+# shell) so `$?` always reflects the command/timeout side of the pipe,
+# never `head`'s - `set -o pipefail` does not otherwise propagate across
+# a fresh `bash -c` invocation, so this can't be assumed from context.
+#
+# Note on the `| head -c` pipe: if a module writes more than
+# MODULE_OUTPUT_MAX_BYTES, `head` closes its read end early and the
+# module's own process may receive SIGPIPE (exit 141) instead of
+# whatever exit code it "would have" returned - this is standard,
+# expected Unix pipe behavior, not a bug, and a truncated-output module
+# is reported the same as any other non-zero-exit module (WARN).
+run_module() {
+    local name="$1"
+
+    if ! module_name_valid "$name"; then
+        printf '%s\t%s\t%s\n' "$STATUS_UNKNOWN" "invalid module name" ""
+        return 0
+    fi
+
+    local path
+    path="$(modules_dir)/${name}.conf"
+
+    local -A fields=()
+    if ! read_module_file "$path" fields; then
+        printf '%s\t%s\t%s\n' "$STATUS_UNKNOWN" "module '${name}' not found or unreadable" ""
+        return 0
+    fi
+
+    local enabled="${fields[ENABLED]:-}"
+    if [[ "$enabled" != "true" ]]; then
+        printf '%s\t%s\t%s\n' "$STATUS_OK" "module '${name}' is disabled" ""
+        return 0
+    fi
+
+    local command="${fields[COMMAND]:-}"
+    if [[ -z "$command" ]]; then
+        printf '%s\t%s\t%s\n' "$STATUS_WARN" "module '${name}' has no COMMAND configured" ""
+        return 0
+    fi
+
+    local timeout_secs="${fields[TIMEOUT]:-}"
+    config_is_positive_integer "$timeout_secs" || timeout_secs="$(module_timeout_default)"
+
+    local output="" rc=0
+    output="$(set -o pipefail; timeout "$timeout_secs" bash -c "$command" 2>&1 | head -c "$MODULE_OUTPUT_MAX_BYTES")" || rc=$?
+    output="${output//$'\n'/ }"
+    output="${output//$'\t'/ }"
+
+    if [[ "$rc" -eq 124 ]]; then
+        printf '%s\t%s\t%s\n' "$STATUS_ERROR" "module '${name}' timed out after ${timeout_secs}s" "$output"
+    elif [[ "$rc" -ne 0 ]]; then
+        printf '%s\t%s\t%s\n' "$STATUS_WARN" "module '${name}' exited non-zero (${rc})" "$output"
+    else
+        printf '%s\t%s\t%s\n' "$STATUS_OK" "module '${name}' OK" "$output"
+    fi
+    return 0
+}
