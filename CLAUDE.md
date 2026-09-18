@@ -7,7 +7,7 @@ Bash tabanlı, read-only sunucu tanılama araç seti.
 Kullanıcı bir terminal oturumunda **"terminal"** dediğinde, bu projeden
 (`/home/<user>/server-toolkit`) kaldığımız yerden devam edilecek.
 
-## Durum (Sprint 10 sonu)
+## Durum (Sprint 11 sonu)
 
 - Sprint 1: `info` + `gpu-info`
 - Sprint 2: `docker-info`
@@ -19,8 +19,9 @@ Kullanıcı bir terminal oturumunda **"terminal"** dediğinde, bu projeden
 - Sprint 8: `logs-info`
 - Sprint 9: `backup-info`
 - Sprint 10: `info` v2 (hızlı dashboard) + `lib/status.sh` (ortak status/alert contract)
+- Sprint 11: configuration engine (`lib/config.sh`, opsiyonel `~/.config/server-toolkit/config` — bkz. `docs/config.md`), `info`'nin RAM_ALERT_PCT eşiği bu engine'e bağlandı.
 
-273/273 test PASS. Tüm komutlar read-only, destructive command yok,
+312/312 test PASS. Tüm komutlar read-only, destructive command yok,
 server-specific hardcoding yok.
 
 ## Mimari
@@ -30,10 +31,10 @@ server-specific hardcoding yok.
   (`common.sh` her yerde kullanılır; diğerleri kendi alanına özgü).
 - `tests/test.sh`: tek dosyalık test suite, mock/stub kullanır, gerçek sunucu
   state'ine bağımlı değildir.
+- `docs/config.md`: opsiyonel configuration engine'in format/kullanım referansı.
 
 ## Henüz yapılmadı
 
-- Configuration engine (YAML/TOML/shell config formatı seçilmedi)
 - TUI
 - Plugin sistemi
 - Proje adı değişikliği / GitHub dosyaları

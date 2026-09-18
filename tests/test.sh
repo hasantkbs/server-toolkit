@@ -2913,6 +2913,14 @@ run_validator "green" "enum" "red|green|blue" && ok "config_validate: 'green' ac
 run_validator "hello" "string" && ok "config_validate: non-empty string accepted" || bad "config_validate: non-empty string rejected"
 run_validator "" "string" && bad "config_validate: empty string wrongly accepted" || ok "config_validate: empty string rejected"
 
+echo "== configuration engine: leading-zero numeric values are rejected (no silent octal reinterpretation) =="
+run_validator "070" "percentage" && bad "config_validate: '070' wrongly accepted as percentage (leading zero)" || ok "config_validate: '070' rejected as percentage (leading zero)"
+run_validator "080" "percentage" && bad "config_validate: '080' wrongly accepted as percentage (leading zero)" || ok "config_validate: '080' rejected as percentage (leading zero)"
+run_validator "07" "positive_integer" && bad "config_validate: '07' wrongly accepted as positive_integer (leading zero)" || ok "config_validate: '07' rejected as positive_integer (leading zero)"
+run_validator "-07" "integer" && bad "config_validate: '-07' wrongly accepted as integer (leading zero)" || ok "config_validate: '-07' rejected as integer (leading zero)"
+run_validator "0" "integer" && ok "config_validate: bare '0' is still a valid integer" || bad "config_validate: bare '0' wrongly rejected as integer"
+run_validator "0" "percentage" && ok "config_validate: bare '0' is still a valid percentage" || bad "config_validate: bare '0' wrongly rejected as percentage"
+
 echo "== configuration engine: absent config uses defaults =="
 CFG_TMP="$(mktemp -d)"
 result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/nope" bash -c '
@@ -3198,6 +3206,53 @@ else
     bad "info exited non-zero with no config file: $(cat /tmp/toolkit_test_info_nocfg.err)"
 fi
 rm -rf "$CFG_TMP2"
+
+echo "== configuration engine: RAM_ALERT_PCT=070 is rejected, not silently reinterpreted as octal 56 =="
+CFG_TMP3="$(mktemp -d)"
+mkdir -p "${CFG_TMP3}/octal070"
+printf 'RAM_ALERT_PCT=070\n' > "${CFG_TMP3}/octal070/config"
+chmod 600 "${CFG_TMP3}/octal070/config"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP3}/octal070" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+' 2>"${CFG_TMP3}/octal070.err")"
+if [[ "$result" == "90" ]] && grep -qi "invalid" "${CFG_TMP3}/octal070.err"; then
+    ok "RAM_ALERT_PCT=070 is rejected and falls back to the default (90), not silently reinterpreted as octal 56"
+else
+    bad "RAM_ALERT_PCT=070 was not handled safely (got '$result', stderr: $(cat "${CFG_TMP3}/octal070.err"))"
+fi
+
+echo "== configuration engine: RAM_ALERT_PCT=080 falls back cleanly, no raw bash arithmetic error leaks to stderr =="
+mkdir -p "${CFG_TMP3}/octal080"
+printf 'RAM_ALERT_PCT=080\n' > "${CFG_TMP3}/octal080/config"
+chmod 600 "${CFG_TMP3}/octal080/config"
+result="$(TOOLKIT_CONFIG_DIR="${CFG_TMP3}/octal080" bash -c '
+    source "'"${LIB_DIR}"'/config.sh"
+    config_get RAM_ALERT_PCT 90 percentage
+' 2>"${CFG_TMP3}/octal080.err")"
+if [[ "$result" == "90" ]] && ! grep -qi "too great\|base" "${CFG_TMP3}/octal080.err"; then
+    ok "RAM_ALERT_PCT=080 falls back to the default (90) with no raw bash arithmetic error in stderr"
+else
+    bad "RAM_ALERT_PCT=080 leaked a raw error or did not fall back correctly (got '$result', stderr: $(cat "${CFG_TMP3}/octal080.err"))"
+fi
+
+echo "== configuration engine: config_path does not crash when HOME and XDG_CONFIG_HOME are both unset =="
+unset_home_err="${CFG_TMP3}/unset_home.err"
+if env -u HOME -u XDG_CONFIG_HOME -u TOOLKIT_CONFIG_DIR bash -c '
+    set -u
+    source "'"${LIB_DIR}"'/config.sh"
+    config_path >/dev/null
+' 2>"$unset_home_err"; then
+    if grep -qi "unbound variable" "$unset_home_err"; then
+        bad "config_path raised an unbound variable error with HOME and XDG_CONFIG_HOME both unset: $(cat "$unset_home_err")"
+    else
+        ok "config_path does not crash when HOME and XDG_CONFIG_HOME are both unset (under set -u)"
+    fi
+else
+    bad "config_path exited non-zero with HOME and XDG_CONFIG_HOME both unset: $(cat "$unset_home_err")"
+fi
+
+rm -rf "$CFG_TMP3"
 
 echo
 echo "Results: ${pass} passed, ${fail} failed"

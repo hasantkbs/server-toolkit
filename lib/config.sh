@@ -42,7 +42,7 @@ config_dir() {
         printf '%s' "${TOOLKIT_CONFIG_DIR}"
         return
     fi
-    printf '%s/%s' "${XDG_CONFIG_HOME:-${HOME}/.config}" "$CONFIG_APP_NAME"
+    printf '%s/%s' "${XDG_CONFIG_HOME:-${HOME:-}/.config}" "$CONFIG_APP_NAME"
 }
 
 # Full path to the config file itself (may or may not exist).
@@ -56,15 +56,15 @@ config_path() {
 # nothing and never touch the filesystem or run other commands.
 
 config_is_integer() {
-    [[ "${1:-}" =~ ^-?[0-9]+$ ]]
+    [[ "${1:-}" =~ ^-?(0|[1-9][0-9]*)$ ]]
 }
 
 config_is_positive_integer() {
-    [[ "${1:-}" =~ ^[0-9]+$ ]] && [[ "$1" -gt 0 ]]
+    [[ "${1:-}" =~ ^(0|[1-9][0-9]*)$ ]] && [[ "$1" -gt 0 ]]
 }
 
 config_is_percentage() {
-    [[ "${1:-}" =~ ^[0-9]+$ ]] && [[ "$1" -ge 0 ]] && [[ "$1" -le 100 ]]
+    [[ "${1:-}" =~ ^(0|[1-9][0-9]*)$ ]] && [[ "$1" -ge 0 ]] && [[ "$1" -le 100 ]]
 }
 
 config_is_boolean() {
