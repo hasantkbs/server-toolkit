@@ -154,29 +154,50 @@ module_timeout_default() {
 # not a script-ending error, matching this codebase's established
 # alerting pattern (compare lib/docker.sh, lib/services.sh).
 #
-# Execution itself: `timeout "$timeout_secs" bash -c "$command"`, output
-# piped through `head -c MODULE_OUTPUT_MAX_BYTES` so this process never
-# buffers more than that many bytes regardless of how much the module
-# writes. `bash -c` runs the command in a fresh child process - never
-# inline-executed in place, never this shell - so it cannot mutate
-# run_module's own variables/functions/shell options, and a hang is
-# killed by `timeout` without taking the caller down with it. GNU
-# `timeout`'s own exit code 124 means "killed for running too long" and
-# is treated as its own ERROR-level outcome, distinct from an ordinary
-# non-zero exit. `pipefail` is turned on inside the command
-# substitution's own subshell (not in run_module's or the caller's
-# shell) so `$?` always reflects the command/timeout side of the pipe,
-# never `head`'s - `set -o pipefail` does not otherwise propagate across
-# a fresh `bash -c` invocation, so this can't be assumed from context.
+# Execution itself: `timeout -k 1 "$timeout_secs" bash -c "$command"`,
+# with stdout+stderr redirected to a temp file (not piped) and stdin
+# from /dev/null. `bash -c` runs the command in a fresh child process -
+# never inline-executed in place, never this shell - so it cannot mutate
+# run_module's own variables/functions/shell options.
 #
-# Note on the `| head -c` pipe: if a module writes more than
-# MODULE_OUTPUT_MAX_BYTES, `head` closes its read end early and the
-# module's own process may receive SIGPIPE (exit 141) instead of
-# whatever exit code it "would have" returned - this is standard,
-# expected Unix pipe behavior, not a bug, and a truncated-output module
-# is reported the same as any other non-zero-exit module (WARN).
+# Why a temp file, not a pipe: capturing via `$(cmd | head -c N)` hangs
+# if the module backgrounds anything (`sleep 8 &`) - a command
+# substitution's pipe only sees EOF once EVERY process holding its write
+# end closes it, including an orphaned grandchild the module itself
+# detached, so run_module would block for as long as that backgrounded
+# process runs, no matter what TIMEOUT says. Redirecting to a real file
+# and reading it back afterward has no such wait: bash's foreground wait
+# tracks only the timeout/bash -c process itself, so a module that
+# backgrounds work returns as soon as its own foreground script line
+# finishes, leaving the background job to run out of band (detached, no
+# longer this function's concern). The tradeoff: the file's own size
+# isn't bounded in real time the way a live `head -c` pipe would be - a
+# well-behaved-but-verbose module could write more than
+# MODULE_OUTPUT_MAX_BYTES to disk before being read back and truncated
+# here. That's judged acceptable: it's still bounded by TIMEOUT (and
+# available disk), and the module is the user's own configured command,
+# not untrusted input.
+#
+# `-k 1` (kill-after) handles a module that ignores SIGTERM: timeout
+# sends SIGTERM at $timeout_secs, then SIGKILL one second later if the
+# process is still alive - SIGKILL cannot be caught or ignored. Worst-
+# case latency for such a module is timeout_secs + 1s, not unbounded.
+#
+# GNU timeout's own exit code 124 means "killed for running too long"
+# and is treated as its own ERROR-level outcome, distinct from an
+# ordinary non-zero exit (though a module that itself exits exactly 124
+# on its own is indistinguishable from a real timeout - an inherent,
+# accepted ambiguity of timeout's exit-code protocol). 137 (128+SIGKILL)
+# is treated the same way: per GNU coreutils' own documented exit-status
+# protocol, 137 means "COMMAND (or timeout itself) is sent the KILL(9)
+# signal" - exactly what happens when `-k 1` escalates past an ignored
+# SIGTERM, so a SIGTERM-ignoring module that had to be force-killed is
+# still reported as a timeout, not silently downgraded to an ordinary
+# non-zero-exit WARN (same inherent, accepted exit-code ambiguity as 124
+# applies here too: a module that itself exits exactly 137 is
+# indistinguishable from one that was actually SIGKILLed).
 run_module() {
-    local name="$1"
+    local name="${1:-}"
 
     if ! module_name_valid "$name"; then
         printf '%s\t%s\t%s\n' "$STATUS_UNKNOWN" "invalid module name" ""
@@ -207,12 +228,35 @@ run_module() {
     local timeout_secs="${fields[TIMEOUT]:-}"
     config_is_positive_integer "$timeout_secs" || timeout_secs="$(module_timeout_default)"
 
-    local output="" rc=0
-    output="$(set -o pipefail; timeout "$timeout_secs" bash -c "$command" 2>&1 | head -c "$MODULE_OUTPUT_MAX_BYTES")" || rc=$?
+    local output="" rc=0 tmp_out=""
+    tmp_out="$(mktemp 2>/dev/null)" || tmp_out=""
+
+    if [[ -n "$tmp_out" ]]; then
+        # Grouped with its own stderr redirected to /dev/null: a module
+        # force-killed via -k's SIGKILL escalation is a normal, expected
+        # outcome here, not a script error - without this, bash itself
+        # (not the module) prints an unrelated "<pid> Killed <command>"
+        # job-control notice to the *caller's* real stderr on every such
+        # kill, which would otherwise leak into bin/info's own output.
+        # The module's own stdout/stderr are unaffected (already fully
+        # redirected into tmp_out above), so this only silences bash's
+        # own notice.
+        { timeout -k 1 "$timeout_secs" bash -c "$command" >"$tmp_out" 2>&1 </dev/null; rc=$?; } 2>/dev/null
+        output="$(head -c "$MODULE_OUTPUT_MAX_BYTES" -- "$tmp_out" 2>/dev/null)"
+        rm -f -- "$tmp_out"
+    else
+        # mktemp failed (should not happen in practice) - fall back to the
+        # pipe-based capture. This path re-introduces the "a backgrounded
+        # grandchild can block this specific call" caveat that the file-
+        # based path above exists to avoid, and needs pipefail scoped to
+        # its own subshell to read timeout's real exit code correctly.
+        { output="$(set -o pipefail; timeout -k 1 "$timeout_secs" bash -c "$command" 2>&1 </dev/null | head -c "$MODULE_OUTPUT_MAX_BYTES")" || rc=$?; } 2>/dev/null
+    fi
+
     output="${output//$'\n'/ }"
     output="${output//$'\t'/ }"
 
-    if [[ "$rc" -eq 124 ]]; then
+    if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
         printf '%s\t%s\t%s\n' "$STATUS_ERROR" "module '${name}' timed out after ${timeout_secs}s" "$output"
     elif [[ "$rc" -ne 0 ]]; then
         printf '%s\t%s\t%s\n' "$STATUS_WARN" "module '${name}' exited non-zero (${rc})" "$output"

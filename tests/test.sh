@@ -3526,6 +3526,9 @@ if [[ "${#output_field}" -le 4096 ]] && [[ "${#output_field}" -gt 0 ]]; then
 else
     bad "module output was not correctly bounded (got ${#output_field} bytes)"
 fi
+status_field="${result%%$'\t'*}"
+[[ "$status_field" == "OK" ]] && ok "a module producing more than MODULE_OUTPUT_MAX_BYTES but exiting 0 is reported OK, not misreported as a failure" \
+    || bad "a verbose-but-successful module was not reported OK (status: '$status_field', full result: '$result')"
 
 echo "== custom modules: module stderr is captured too =="
 mkdir -p "${MOD_TMP2}/stderr/modules"
@@ -3610,6 +3613,148 @@ result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/newline" bash -c '
     || bad "embedded newlines in module output broke the one-line contract (line count: $result)"
 
 rm -rf "$MOD_TMP2"
+
+echo "== custom modules: modules_enabled defaults to false, respects config, fails closed on garbage =="
+MOD_TMP4="$(mktemp -d)"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP4}/nope" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    modules_enabled && echo true || echo false
+')"
+[[ "$result" == "false" ]] && ok "modules_enabled defaults to false with no config" \
+    || bad "modules_enabled did not default to false (got '$result')"
+
+mkdir -p "${MOD_TMP4}/on"
+printf 'CUSTOM_MODULES_ENABLED=true\n' > "${MOD_TMP4}/on/config"
+chmod 600 "${MOD_TMP4}/on/config"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP4}/on" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    modules_enabled && echo true || echo false
+')"
+[[ "$result" == "true" ]] && ok "modules_enabled returns true when CUSTOM_MODULES_ENABLED=true" \
+    || bad "modules_enabled did not turn on correctly (got '$result')"
+
+mkdir -p "${MOD_TMP4}/garbage"
+printf 'CUSTOM_MODULES_ENABLED=yes\n' > "${MOD_TMP4}/garbage/config"
+chmod 600 "${MOD_TMP4}/garbage/config"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP4}/garbage" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    modules_enabled && echo true || echo false
+' 2>/dev/null)"
+[[ "$result" == "false" ]] && ok "modules_enabled fails closed on an invalid boolean value (yes)" \
+    || bad "modules_enabled did not fail closed on garbage input (got '$result')"
+
+echo "== custom modules: module_timeout_default defaults to 5, respects config =="
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP4}/nope" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    module_timeout_default
+')"
+[[ "$result" == "5" ]] && ok "module_timeout_default defaults to 5 with no config" \
+    || bad "module_timeout_default did not default to 5 (got '$result')"
+
+mkdir -p "${MOD_TMP4}/customtimeout"
+printf 'CUSTOM_MODULE_TIMEOUT_DEFAULT=10\n' > "${MOD_TMP4}/customtimeout/config"
+chmod 600 "${MOD_TMP4}/customtimeout/config"
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP4}/customtimeout" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    module_timeout_default
+')"
+[[ "$result" == "10" ]] && ok "module_timeout_default respects CUSTOM_MODULE_TIMEOUT_DEFAULT" \
+    || bad "module_timeout_default did not pick up the configured value (got '$result')"
+
+echo "== custom modules: invalid per-module TIMEOUT falls back to the default rather than misbehaving =="
+mkdir -p "${MOD_TMP4}/badtimeout/modules"
+printf 'ENABLED=true\nCOMMAND=echo ok\nTIMEOUT=-1\n' > "${MOD_TMP4}/badtimeout/modules/neg.conf"
+printf 'ENABLED=true\nCOMMAND=echo ok\nTIMEOUT=abc\n' > "${MOD_TMP4}/badtimeout/modules/notnum.conf"
+chmod 600 "${MOD_TMP4}/badtimeout/modules/neg.conf" "${MOD_TMP4}/badtimeout/modules/notnum.conf"
+result_neg="$(TOOLKIT_CONFIG_DIR="${MOD_TMP4}/badtimeout" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module neg
+')"
+result_notnum="$(TOOLKIT_CONFIG_DIR="${MOD_TMP4}/badtimeout" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module notnum
+')"
+if [[ "$result_neg" == *"ok"* ]] && [[ "$result_notnum" == *"ok"* ]]; then
+    ok "an invalid TIMEOUT (-1 or non-numeric) falls back to the default and the module still runs normally"
+else
+    bad "invalid TIMEOUT handling did not fall back correctly (neg: '$result_neg', notnum: '$result_notnum')"
+fi
+
+echo "== custom modules: run_module with a missing argument does not crash a set -u caller =="
+result="$(bash -c '
+    set -euo pipefail
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module
+    echo survived
+' 2>&1)"
+[[ "$result" == *"survived"* ]] && ok "run_module with no argument does not abort a set -u/-e caller" \
+    || bad "run_module with a missing argument crashed the caller (result: '$result')"
+
+echo "== custom modules: a module that backgrounds a process does not hang run_module (Shape A) =="
+mkdir -p "${MOD_TMP4}/bg/modules"
+printf 'ENABLED=true\nCOMMAND=sleep 8 & echo started\nTIMEOUT=1\n' > "${MOD_TMP4}/bg/modules/bg.conf"
+chmod 600 "${MOD_TMP4}/bg/modules/bg.conf"
+start_ts=$(date +%s)
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP4}/bg" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module bg
+')"
+end_ts=$(date +%s)
+elapsed=$(( end_ts - start_ts ))
+if [[ "$elapsed" -lt 4 ]] && [[ "$result" == *"started"* ]]; then
+    ok "a module that backgrounds a process returns promptly (elapsed ${elapsed}s), not blocked by the backgrounded child"
+else
+    bad "a backgrounding module hung run_module (elapsed ${elapsed}s, result: '$result')"
+fi
+
+echo "== custom modules: a module ignoring SIGTERM is still killed within timeout + kill-after (Shape B) =="
+mkdir -p "${MOD_TMP4}/ignoreterm/modules"
+printf 'ENABLED=true\nCOMMAND=trap "" TERM; sleep 8; echo done\nTIMEOUT=1\n' > "${MOD_TMP4}/ignoreterm/modules/stubborn.conf"
+chmod 600 "${MOD_TMP4}/ignoreterm/modules/stubborn.conf"
+start_ts=$(date +%s)
+result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP4}/ignoreterm" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    run_module stubborn
+')"
+end_ts=$(date +%s)
+elapsed=$(( end_ts - start_ts ))
+if [[ "$elapsed" -lt 5 ]] && [[ "$result" == *"timed out"* ]]; then
+    ok "a module ignoring SIGTERM is force-killed within timeout+kill-after (elapsed ${elapsed}s), not left running for its full 8s"
+else
+    bad "a SIGTERM-ignoring module was not killed promptly (elapsed ${elapsed}s, result: '$result')"
+fi
+
+rm -rf "$MOD_TMP4"
 
 echo
 echo "Results: ${pass} passed, ${fail} failed"
