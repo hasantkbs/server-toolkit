@@ -16,7 +16,7 @@ ok() { printf '  ok   - %s\n' "$1"; pass=$(( pass + 1 )); }
 bad() { printf '  FAIL - %s\n' "$1"; fail=$(( fail + 1 )); }
 
 echo "== bash -n syntax check =="
-for f in "${BIN_DIR}"/info "${BIN_DIR}"/gpu-info "${BIN_DIR}"/docker-info "${BIN_DIR}"/network-info "${BIN_DIR}"/storage-info "${BIN_DIR}"/services-info "${BIN_DIR}"/security-info "${BIN_DIR}"/process-info "${BIN_DIR}"/logs-info "${BIN_DIR}"/backup-info "${TOOLKIT_DIR}"/lib/*.sh; do
+for f in "${BIN_DIR}"/info "${BIN_DIR}"/gpu-info "${BIN_DIR}"/docker-info "${BIN_DIR}"/network-info "${BIN_DIR}"/storage-info "${BIN_DIR}"/services-info "${BIN_DIR}"/security-info "${BIN_DIR}"/process-info "${BIN_DIR}"/logs-info "${BIN_DIR}"/backup-info "${BIN_DIR}"/server-toolkit "${TOOLKIT_DIR}"/lib/*.sh; do
     if bash -n "$f" 2>/dev/null; then
         ok "bash -n $f"
     else
@@ -3834,6 +3834,156 @@ elapsed=$(( end_ts - start_ts ))
     || bad "a slow module's timeout did not bound info's total runtime (elapsed ${elapsed}s)"
 
 rm -rf "$MOD_TMP3"
+
+echo "== cli: no args dispatches to info =="
+if result="$("${BIN_DIR}/server-toolkit" 2>/dev/null)"; then
+    grep -q '^SERVER$' <<<"$result" && ok "server-toolkit with no arguments shows the info dashboard (SERVER header present)" \
+        || bad "server-toolkit with no arguments did not show the info dashboard"
+else
+    bad "server-toolkit with no arguments exited non-zero"
+fi
+
+echo "== cli: help =="
+result="$("${BIN_DIR}/server-toolkit" help)"
+rc=$?
+if [[ "$rc" -eq 0 ]] && grep -q '^COMMANDS:$' <<<"$result" && grep -q 'info' <<<"$result"; then
+    ok "server-toolkit help exits 0 and lists commands"
+else
+    bad "server-toolkit help did not behave correctly (rc=$rc)"
+fi
+
+echo "== cli: --help =="
+result="$("${BIN_DIR}/server-toolkit" --help)"
+rc=$?
+[[ "$rc" -eq 0 ]] && grep -q '^COMMANDS:$' <<<"$result" && ok "server-toolkit --help behaves like help" \
+    || bad "server-toolkit --help did not behave correctly (rc=$rc)"
+
+echo "== cli: -h =="
+result="$("${BIN_DIR}/server-toolkit" -h)"
+rc=$?
+[[ "$rc" -eq 0 ]] && grep -q '^COMMANDS:$' <<<"$result" && ok "server-toolkit -h behaves like help" \
+    || bad "server-toolkit -h did not behave correctly (rc=$rc)"
+
+echo "== cli: version =="
+result="$("${BIN_DIR}/server-toolkit" version)"
+rc=$?
+[[ "$rc" -eq 0 ]] && grep -qE '^server-toolkit [0-9]' <<<"$result" && ok "server-toolkit version prints a version string and exits 0" \
+    || bad "server-toolkit version did not behave correctly (rc=$rc, output: '$result')"
+
+echo "== cli: --version =="
+result="$("${BIN_DIR}/server-toolkit" --version)"
+[[ "$?" -eq 0 ]] && grep -qE '^server-toolkit [0-9]' <<<"$result" && ok "server-toolkit --version behaves like version" \
+    || bad "server-toolkit --version did not behave correctly"
+
+echo "== cli: -V =="
+result="$("${BIN_DIR}/server-toolkit" -V)"
+[[ "$?" -eq 0 ]] && grep -qE '^server-toolkit [0-9]' <<<"$result" && ok "server-toolkit -V behaves like version" \
+    || bad "server-toolkit -V did not behave correctly"
+
+echo "== cli: version string is defined in exactly one place =="
+version_definitions="$(grep -c 'TOOLKIT_VERSION=' "${BIN_DIR}/server-toolkit")"
+[[ "$version_definitions" -eq 1 ]] && ok "TOOLKIT_VERSION is assigned exactly once in bin/server-toolkit" \
+    || bad "TOOLKIT_VERSION is assigned $version_definitions times, expected exactly 1"
+
+echo "== cli: all command mappings reach the correct underlying command =="
+declare -A CLI_EXPECTED_HEADERS=(
+    [info]="SERVER"
+    [gpu]="GPU INFO"
+    [docker]="CONTAINERS"
+    [network]="LISTENING PORTS"
+    [storage]="FILESYSTEM"
+    [services]="ACTIVE SERVICES"
+    [security]="SSH"
+    [process]="PROCESS OVERVIEW"
+    [logs]="LOG SUMMARY"
+    [backup]="BACKUP STATUS"
+)
+for cli_cmd in "${!CLI_EXPECTED_HEADERS[@]}"; do
+    header="${CLI_EXPECTED_HEADERS[$cli_cmd]}"
+    if cli_out="$("${BIN_DIR}/server-toolkit" "$cli_cmd" 2>/dev/null)"; then
+        if grep -qF "$header" <<<"$cli_out"; then
+            ok "server-toolkit $cli_cmd reaches the command with the '$header' section"
+        else
+            bad "server-toolkit $cli_cmd did not show the expected '$header' section"
+        fi
+    else
+        bad "server-toolkit $cli_cmd exited non-zero"
+    fi
+done
+
+echo "== cli: unknown command =="
+"${BIN_DIR}/server-toolkit" banana >/tmp/toolkit_test_cli_unknown.out 2>/tmp/toolkit_test_cli_unknown.err
+rc=$?
+if [[ "$rc" -ne 0 ]] && grep -q 'unknown command' /tmp/toolkit_test_cli_unknown.err && grep -q 'help' /tmp/toolkit_test_cli_unknown.err; then
+    ok "server-toolkit banana exits non-zero with a clear message pointing at help (rc=$rc)"
+else
+    bad "server-toolkit banana did not fail cleanly (rc=$rc, stderr: $(cat /tmp/toolkit_test_cli_unknown.err))"
+fi
+if ! grep -qiE 'traceback|line [0-9]+:.*unbound|syntax error' /tmp/toolkit_test_cli_unknown.err; then
+    ok "server-toolkit banana's error output contains no raw Bash internal error text"
+else
+    bad "server-toolkit banana leaked a raw Bash internal error: $(cat /tmp/toolkit_test_cli_unknown.err)"
+fi
+
+echo "== cli: unknown positional argument to a known command is passed through deterministically =="
+if result="$("${BIN_DIR}/server-toolkit" info extra 2>/dev/null)"; then
+    grep -q '^SERVER$' <<<"$result" && ok "server-toolkit info extra still runs info normally (extra argument is a harmless no-op)" \
+        || bad "server-toolkit info extra did not show the SERVER header"
+else
+    bad "server-toolkit info extra exited non-zero"
+fi
+
+echo "== cli: injection payload is never interpreted as shell code =="
+rm -f /tmp/cli-pwned
+"${BIN_DIR}/server-toolkit" '; touch /tmp/cli-pwned' >/tmp/toolkit_test_cli_injection.out 2>/tmp/toolkit_test_cli_injection.err
+rc=$?
+if [[ ! -e /tmp/cli-pwned ]] && [[ "$rc" -eq 127 ]] && grep -qF '; touch /tmp/cli-pwned' /tmp/toolkit_test_cli_injection.err; then
+    ok "a shell-metacharacter payload as the command argument is never executed, only printed as inert text (rc=127)"
+else
+    bad "SECURITY: injection payload handling was wrong (rc=$rc, marker exists: $([[ -e /tmp/cli-pwned ]] && echo yes || echo no), stderr: $(cat /tmp/toolkit_test_cli_injection.err))"
+fi
+rm -f /tmp/cli-pwned
+
+echo "== cli: no eval, no bash -c/sh -c on user input (static check) =="
+if ! grep -qE '\beval\b' "${BIN_DIR}/server-toolkit"; then
+    ok "bin/server-toolkit contains no 'eval'"
+else
+    bad "bin/server-toolkit contains 'eval' - forbidden by this sprint's design"
+fi
+if ! grep -qE '\b(bash|sh)\s+-c\b' "${BIN_DIR}/server-toolkit"; then
+    ok "bin/server-toolkit contains no 'bash -c'/'sh -c'"
+else
+    bad "bin/server-toolkit contains 'bash -c' or 'sh -c' - forbidden by this sprint's design"
+fi
+
+echo "== cli: child exit code propagation =="
+CLI_TMP="$(mktemp -d)"
+cp "${BIN_DIR}/server-toolkit" "${CLI_TMP}/server-toolkit"
+chmod +x "${CLI_TMP}/server-toolkit"
+printf '#!/usr/bin/env bash\nexit 0\n' > "${CLI_TMP}/info"
+chmod +x "${CLI_TMP}/info"
+"${CLI_TMP}/server-toolkit" info
+rc_zero=$?
+printf '#!/usr/bin/env bash\nexit 7\n' > "${CLI_TMP}/info"
+chmod +x "${CLI_TMP}/info"
+"${CLI_TMP}/server-toolkit" info
+rc_seven=$?
+if [[ "$rc_zero" -eq 0 ]] && [[ "$rc_seven" -eq 7 ]]; then
+    ok "the dispatcher propagates the underlying command's exit code exactly (0 and 7 both verified)"
+else
+    bad "exit code propagation is broken (expected 0 and 7, got $rc_zero and $rc_seven)"
+fi
+
+echo "== cli: missing underlying command produces a clear error, not a raw exec failure =="
+rm -f "${CLI_TMP}/info"
+"${CLI_TMP}/server-toolkit" info >/tmp/toolkit_test_cli_missing.out 2>/tmp/toolkit_test_cli_missing.err
+rc=$?
+if [[ "$rc" -eq 1 ]] && grep -q 'command not found or not executable' /tmp/toolkit_test_cli_missing.err; then
+    ok "a missing underlying command produces a clear, controlled error (rc=1)"
+else
+    bad "a missing underlying command was not handled cleanly (rc=$rc, stderr: $(cat /tmp/toolkit_test_cli_missing.err))"
+fi
+rm -rf "$CLI_TMP"
 
 echo
 echo "Results: ${pass} passed, ${fail} failed"

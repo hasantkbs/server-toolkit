@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# server-toolkit - single entry point / dispatcher for server-toolkit's
+# individual bin/*-info commands (Sprint 13, CLI/command UX).
+#
+# SECURITY: command resolution is a fixed, explicit mapping (the `case`
+# statement below) from a small set of literal command names to a small
+# set of literal target paths - no dynamic command construction or shell
+# re-interpretation of user input, and no path built by concatenating
+# user input into a filename. An unrecognized command is only ever used
+# as inert text (printed via printf %s in an error message), never
+# executed or interpreted.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+BIN_DIR="$SCRIPT_DIR"
+
+# The one place this version string is defined - bump it here only.
+TOOLKIT_VERSION="0.13.0-dev"
+
+print_help() {
+    cat <<'EOF'
+server-toolkit - Bash-based, read-only server diagnostics toolkit
+
+USAGE:
+  server-toolkit [COMMAND] [ARGS]
+
+Running with no command shows the `info` dashboard.
+
+COMMANDS:
+  info       System dashboard
+  gpu        GPU diagnostics
+  docker     Docker diagnostics
+  network    Network diagnostics
+  storage    Storage diagnostics
+  services   Service diagnostics
+  security   Security diagnostics
+  process    Process diagnostics
+  logs       Journal/log diagnostics
+  backup     Backup discovery
+  modules    Custom modules
+  config     Configuration
+  version    Show version
+  help       Show help
+
+Each command behaves identically to its standalone counterpart (info,
+gpu-info, docker-info, ...) - this dispatcher is a thin layer over them,
+not a replacement. Those standalone commands keep working directly too.
+EOF
+}
+
+print_version() {
+    printf 'server-toolkit %s\n' "$TOOLKIT_VERSION"
+}
+
+cmd="${1:-info}"
+[[ $# -gt 0 ]] && shift
+
+case "$cmd" in
+    info)     target="${BIN_DIR}/info" ;;
+    gpu)      target="${BIN_DIR}/gpu-info" ;;
+    docker)   target="${BIN_DIR}/docker-info" ;;
+    network)  target="${BIN_DIR}/network-info" ;;
+    storage)  target="${BIN_DIR}/storage-info" ;;
+    services) target="${BIN_DIR}/services-info" ;;
+    security) target="${BIN_DIR}/security-info" ;;
+    process)  target="${BIN_DIR}/process-info" ;;
+    logs)     target="${BIN_DIR}/logs-info" ;;
+    backup)   target="${BIN_DIR}/backup-info" ;;
+    modules)
+        LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
+        # shellcheck source=../lib/common.sh
+        source "${LIB_DIR}/common.sh"
+        # shellcheck source=../lib/config.sh
+        source "${LIB_DIR}/config.sh"
+        # shellcheck source=../lib/modules.sh
+        source "${LIB_DIR}/modules.sh"
+        cmd_modules
+        exit $?
+        ;;
+    config)
+        LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
+        # shellcheck source=../lib/common.sh
+        source "${LIB_DIR}/common.sh"
+        # shellcheck source=../lib/config.sh
+        source "${LIB_DIR}/config.sh"
+        cmd_config "$@"
+        exit $?
+        ;;
+    version|--version|-V)
+        print_version
+        exit 0
+        ;;
+    help|--help|-h)
+        print_help
+        exit 0
+        ;;
+    *)
+        printf 'server-toolkit: unknown command: %s\n' "$cmd" >&2
+        printf "Run 'server-toolkit help' to see available commands.\n" >&2
+        exit 127
+        ;;
+esac
+
+if [[ ! -x "$target" ]]; then
+    printf 'server-toolkit: command not found or not executable: %s\n' "$target" >&2
+    exit 1
+fi
+
+exec "$target" "$@"
