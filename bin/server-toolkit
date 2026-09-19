@@ -52,6 +52,78 @@ print_version() {
     printf 'server-toolkit %s\n' "$TOOLKIT_VERSION"
 }
 
+# Shows discovered custom modules and their enabled/disabled status.
+# Read-only introspection only: calls discover_modules/read_module_file
+# (lib/modules.sh's own discovery/parsing, which never execute anything
+# by design) and NEVER calls run_module - this command must never run a
+# module's COMMAND, preserving Sprint 12's exact execution trust model.
+cmd_modules() {
+    if ! modules_enabled; then
+        printf 'Custom modules are disabled (CUSTOM_MODULES_ENABLED=false).\n'
+        printf 'Enable them by adding CUSTOM_MODULES_ENABLED=true to the main config file.\n'
+        printf 'See docs/modules.md for details.\n'
+        return 0
+    fi
+
+    local names
+    names="$(discover_modules)"
+    if [[ -z "$names" ]]; then
+        printf 'Custom modules are enabled, but no modules were found under %s.\n' "$(modules_dir)"
+        return 0
+    fi
+
+    printf '%-20s %-10s %s\n' "MODULE" "STATUS" "COMMAND"
+    local name path status
+    local -A fields
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        path="$(modules_dir)/${name}.conf"
+        fields=()
+        if ! read_module_file "$path" fields; then
+            printf '%-20s %-10s %s\n' "$name" "error" "(unreadable)"
+            continue
+        fi
+        status="disabled"
+        [[ "${fields[ENABLED]:-}" == "true" ]] && status="enabled"
+        printf '%-20s %-10s %s\n' "$name" "$status" "${fields[COMMAND]:-(none)}"
+    done <<<"$names"
+}
+
+# Read-only configuration helper: `path` prints the resolved config file
+# path, `show` prints its raw content (or says none exists, or warns if
+# the file exists but would be ignored for unsafe ownership/permissions -
+# reusing lib/config.sh's own trust check, not a second implementation of
+# it). Never modifies configuration - there is no "set"/"edit" subcommand
+# by design; this sprint keeps config read-only.
+cmd_config() {
+    local sub="${1:-show}"
+    case "$sub" in
+        path)
+            config_path
+            printf '\n'
+            ;;
+        show)
+            local path
+            path="$(config_path)"
+            if [[ ! -f "$path" ]]; then
+                printf 'No config file at %s.\n' "$path"
+                printf '(server-toolkit is running with default values.)\n'
+                return 0
+            fi
+            if ! _config_permissions_safe "$path"; then
+                printf 'WARNING: %s is not owned by you, or is writable by others - server-toolkit ignores it and uses defaults.\n\n' "$path"
+            fi
+            printf 'Config file: %s\n\n' "$path"
+            cat -- "$path"
+            ;;
+        *)
+            printf 'server-toolkit: unknown config subcommand: %s\n' "$sub" >&2
+            printf "Available: 'server-toolkit config path', 'server-toolkit config show'\n" >&2
+            return 1
+            ;;
+    esac
+}
+
 cmd="${1:-info}"
 [[ $# -gt 0 ]] && shift
 

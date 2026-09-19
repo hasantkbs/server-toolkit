@@ -4002,6 +4002,84 @@ else
 fi
 rm -rf "$CLI_TMP"
 
+echo "== cli: modules command when custom modules are disabled =="
+CLI_TMP2="$(mktemp -d)"
+result="$(TOOLKIT_CONFIG_DIR="${CLI_TMP2}/off" "${BIN_DIR}/server-toolkit" modules)"
+[[ "$result" == *"disabled"* ]] && ok "server-toolkit modules reports the feature as disabled when CUSTOM_MODULES_ENABLED is unset" \
+    || bad "server-toolkit modules did not correctly report the disabled state (got: '$result')"
+
+echo "== cli: modules command when enabled but no modules exist =="
+mkdir -p "${CLI_TMP2}/empty/modules"
+printf 'CUSTOM_MODULES_ENABLED=true\n' > "${CLI_TMP2}/empty/config"
+chmod 600 "${CLI_TMP2}/empty/config"
+result="$(TOOLKIT_CONFIG_DIR="${CLI_TMP2}/empty" "${BIN_DIR}/server-toolkit" modules)"
+[[ "$result" == *"no modules were found"* ]] && ok "server-toolkit modules reports an empty state when enabled but no modules exist" \
+    || bad "server-toolkit modules did not correctly report the empty state (got: '$result')"
+
+echo "== cli: modules command lists discovered modules with their enabled/disabled status =="
+mkdir -p "${CLI_TMP2}/withmods/modules"
+printf 'CUSTOM_MODULES_ENABLED=true\n' > "${CLI_TMP2}/withmods/config"
+chmod 600 "${CLI_TMP2}/withmods/config"
+printf 'ENABLED=true\nCOMMAND=echo hi\n' > "${CLI_TMP2}/withmods/modules/alpha.conf"
+printf 'ENABLED=false\nCOMMAND=echo bye\n' > "${CLI_TMP2}/withmods/modules/beta.conf"
+chmod 600 "${CLI_TMP2}/withmods/modules/alpha.conf" "${CLI_TMP2}/withmods/modules/beta.conf"
+result="$(TOOLKIT_CONFIG_DIR="${CLI_TMP2}/withmods" "${BIN_DIR}/server-toolkit" modules)"
+if grep -qE '^alpha\s+enabled\s+echo hi$' <<<"$result" && grep -qE '^beta\s+disabled\s+echo bye$' <<<"$result"; then
+    ok "server-toolkit modules correctly shows each module's own enabled/disabled status and command"
+else
+    bad "server-toolkit modules did not correctly list modules (got: '$result')"
+fi
+
+echo "== cli: modules command never executes a module's COMMAND (introspection-only canary) =="
+rm -f /tmp/cli-modules-pwned
+mkdir -p "${CLI_TMP2}/canary/modules"
+printf 'CUSTOM_MODULES_ENABLED=true\n' > "${CLI_TMP2}/canary/config"
+chmod 600 "${CLI_TMP2}/canary/config"
+printf 'ENABLED=true\nCOMMAND=touch /tmp/cli-modules-pwned\n' > "${CLI_TMP2}/canary/modules/danger.conf"
+chmod 600 "${CLI_TMP2}/canary/modules/danger.conf"
+TOOLKIT_CONFIG_DIR="${CLI_TMP2}/canary" "${BIN_DIR}/server-toolkit" modules >/dev/null 2>&1
+if [[ ! -e /tmp/cli-modules-pwned ]]; then
+    ok "server-toolkit modules lists an enabled module without ever running its COMMAND"
+else
+    bad "SECURITY: server-toolkit modules executed a module's COMMAND - it must only ever introspect"
+fi
+rm -f /tmp/cli-modules-pwned
+
+echo "== cli: config path =="
+result="$(TOOLKIT_CONFIG_DIR="${CLI_TMP2}/somewhere" "${BIN_DIR}/server-toolkit" config path)"
+[[ "$result" == "${CLI_TMP2}/somewhere/config" ]] && ok "server-toolkit config path prints the resolved config path" \
+    || bad "server-toolkit config path did not print the expected path (got: '$result')"
+
+echo "== cli: config show with no config file =="
+result="$(TOOLKIT_CONFIG_DIR="${CLI_TMP2}/nofile" "${BIN_DIR}/server-toolkit" config show)"
+[[ "$result" == *"No config file"* ]] && ok "server-toolkit config show reports cleanly when no config file exists" \
+    || bad "server-toolkit config show did not correctly report the missing-file case (got: '$result')"
+
+echo "== cli: config show with an existing, safe config file =="
+mkdir -p "${CLI_TMP2}/withconfig"
+printf 'RAM_ALERT_PCT=80\n' > "${CLI_TMP2}/withconfig/config"
+chmod 600 "${CLI_TMP2}/withconfig/config"
+result="$(TOOLKIT_CONFIG_DIR="${CLI_TMP2}/withconfig" "${BIN_DIR}/server-toolkit" config show)"
+[[ "$result" == *"RAM_ALERT_PCT=80"* ]] && ok "server-toolkit config show prints the real config file content" \
+    || bad "server-toolkit config show did not print the file content (got: '$result')"
+
+echo "== cli: config show warns about an unsafe-permission config file =="
+mkdir -p "${CLI_TMP2}/unsafe"
+printf 'RAM_ALERT_PCT=80\n' > "${CLI_TMP2}/unsafe/config"
+chmod 666 "${CLI_TMP2}/unsafe/config"
+result="$(TOOLKIT_CONFIG_DIR="${CLI_TMP2}/unsafe" "${BIN_DIR}/server-toolkit" config show)"
+[[ "$result" == *"WARNING"* ]] && ok "server-toolkit config show warns when the config file has unsafe permissions" \
+    || bad "server-toolkit config show did not warn about unsafe permissions (got: '$result')"
+chmod 600 "${CLI_TMP2}/unsafe/config"
+
+echo "== cli: config unknown subcommand =="
+"${BIN_DIR}/server-toolkit" config frobnicate >/tmp/toolkit_test_cli_config_unknown.out 2>/tmp/toolkit_test_cli_config_unknown.err
+rc=$?
+[[ "$rc" -ne 0 ]] && grep -q 'unknown config subcommand' /tmp/toolkit_test_cli_config_unknown.err && ok "server-toolkit config frobnicate fails cleanly with a clear message" \
+    || bad "server-toolkit config frobnicate did not fail cleanly (rc=$rc, stderr: $(cat /tmp/toolkit_test_cli_config_unknown.err))"
+
+rm -rf "$CLI_TMP2"
+
 echo
 echo "Results: ${pass} passed, ${fail} failed"
 [[ "$fail" -eq 0 ]]
