@@ -22,7 +22,7 @@ Kullanıcı bir terminal oturumunda **"terminal"** dediğinde, bu projeden
 - Sprint 11: configuration engine (`lib/config.sh`, opsiyonel `~/.config/server-toolkit/config` — bkz. `docs/config.md`), `info`'nin RAM_ALERT_PCT eşiği bu engine'e bağlandı.
 - Sprint 12: custom module system (`lib/modules.sh`, opsiyonel `~/.config/server-toolkit/modules/` — bkz. `docs/modules.md`), `info`'ye `CUSTOM_MODULES_ENABLED` ile aç/kapa özel modül desteği eklendi.
 
-368/368 test PASS. Tüm komutlar read-only, destructive command yok,
+369/369 test PASS. Tüm komutlar read-only, destructive command yok,
 server-specific hardcoding yok.
 
 ## Mimari
