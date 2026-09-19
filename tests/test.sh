@@ -3944,6 +3944,23 @@ else
 fi
 rm -f /tmp/cli-pwned
 
+echo "== cli: command-substitution payload as the command argument is never executed =="
+rm -f /tmp/cli-pwned-subshell
+"${BIN_DIR}/server-toolkit" '$(touch /tmp/cli-pwned-subshell)' >/tmp/toolkit_test_cli_injection2.out 2>/tmp/toolkit_test_cli_injection2.err
+rc=$?
+if [[ ! -e /tmp/cli-pwned-subshell ]] && [[ "$rc" -eq 127 ]]; then
+    ok "a \$(...) payload as the command argument is never executed (rc=127)"
+else
+    bad "SECURITY: a \$(...) payload was not handled safely (rc=$rc, marker exists: $([[ -e /tmp/cli-pwned-subshell ]] && echo yes || echo no))"
+fi
+rm -f /tmp/cli-pwned-subshell
+
+echo "== cli: a path-traversal-style command name is rejected, not resolved to a real file =="
+"${BIN_DIR}/server-toolkit" '../../etc/passwd' >/tmp/toolkit_test_cli_traversal.out 2>/tmp/toolkit_test_cli_traversal.err
+rc=$?
+[[ "$rc" -eq 127 ]] && grep -q 'unknown command' /tmp/toolkit_test_cli_traversal.err && ok "a path-traversal-style command name is treated as an unknown command, not resolved as a path (rc=127)" \
+    || bad "a path-traversal-style command name was not rejected correctly (rc=$rc)"
+
 echo "== cli: no eval, no bash -c/sh -c on user input (static check) =="
 if ! grep -qE '\beval\b' "${BIN_DIR}/server-toolkit"; then
     ok "bin/server-toolkit contains no 'eval'"
