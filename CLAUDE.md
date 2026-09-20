@@ -23,8 +23,13 @@ Kullanıcı bir terminal oturumunda **"terminal"** dediğinde, bu projeden
 - Sprint 12: custom module system (`lib/modules.sh`, opsiyonel `~/.config/server-toolkit/modules/` — bkz. `docs/modules.md`), `info`'ye `CUSTOM_MODULES_ENABLED` ile aç/kapa özel modül desteği eklendi.
 - Sprint 13: CLI dispatcher (`bin/server-toolkit` — `server-toolkit info`, `gpu`, `docker`, ... ve `modules`/`config`/`version`/`help` — bkz. `docs/cli.md`), eski bağımsız komutlar (`info`, `gpu-info`, ...) değişmeden çalışmaya devam ediyor.
 
-369/369 test PASS. Tüm komutlar read-only, destructive command yok,
-server-specific hardcoding yok.
+406/407 test PASS. Tüm komutlar read-only, destructive command yok,
+server-specific hardcoding yok. Bilinen 1 hata: "info v2 mocked scenarios"
+bölümündeki "healthy mocked system" testi, gerçek host swap kullanımı
+%10 eşiğini geçtiğinde başarısız olur (bu test RAM/swap/disk'i mock'lamıyor,
+gerçek `/proc` verisini okuyor) — Sprint 13'ten bağımsız, önceden var olan
+bir ortam bağımlılığı, kod hatası değil. `free -m` ile swap kontrol edip
+gerekirse bu testin mock kapsamını genişletmek ayrı bir iş.
 
 ## Mimari
 
