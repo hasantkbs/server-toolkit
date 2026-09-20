@@ -138,6 +138,7 @@ case "$cmd" in
     process)  target="${BIN_DIR}/process-info" ;;
     logs)     target="${BIN_DIR}/logs-info" ;;
     backup)   target="${BIN_DIR}/backup-info" ;;
+    tui)      target="${BIN_DIR}/tui" ;;
     modules)
         LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
         # shellcheck source=../lib/common.sh

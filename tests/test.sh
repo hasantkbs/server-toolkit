@@ -16,7 +16,7 @@ ok() { printf '  ok   - %s\n' "$1"; pass=$(( pass + 1 )); }
 bad() { printf '  FAIL - %s\n' "$1"; fail=$(( fail + 1 )); }
 
 echo "== bash -n syntax check =="
-for f in "${BIN_DIR}"/info "${BIN_DIR}"/gpu-info "${BIN_DIR}"/docker-info "${BIN_DIR}"/network-info "${BIN_DIR}"/storage-info "${BIN_DIR}"/services-info "${BIN_DIR}"/security-info "${BIN_DIR}"/process-info "${BIN_DIR}"/logs-info "${BIN_DIR}"/backup-info "${BIN_DIR}"/server-toolkit "${TOOLKIT_DIR}"/lib/*.sh; do
+for f in "${BIN_DIR}"/info "${BIN_DIR}"/gpu-info "${BIN_DIR}"/docker-info "${BIN_DIR}"/network-info "${BIN_DIR}"/storage-info "${BIN_DIR}"/services-info "${BIN_DIR}"/security-info "${BIN_DIR}"/process-info "${BIN_DIR}"/logs-info "${BIN_DIR}"/backup-info "${BIN_DIR}"/server-toolkit "${BIN_DIR}"/tui "${TOOLKIT_DIR}"/lib/*.sh; do
     if bash -n "$f" 2>/dev/null; then
         ok "bash -n $f"
     else
@@ -4079,6 +4079,183 @@ rc=$?
     || bad "server-toolkit config frobnicate did not fail cleanly (rc=$rc, stderr: $(cat /tmp/toolkit_test_cli_config_unknown.err))"
 
 rm -rf "$CLI_TMP2"
+
+echo "== tui: command exists and is wired into the dispatcher =="
+if [[ -x "${BIN_DIR}/tui" ]]; then
+    ok "bin/tui exists and is executable"
+else
+    bad "bin/tui is missing or not executable"
+fi
+if grep -qE '^\s*tui\)\s+target="\$\{BIN_DIR\}/tui"' "${BIN_DIR}/server-toolkit"; then
+    ok "server-toolkit's dispatcher maps 'tui' to bin/tui"
+else
+    bad "server-toolkit's dispatcher does not correctly map 'tui'"
+fi
+result="$("${BIN_DIR}/server-toolkit" tui 2>&1 || true)"
+if [[ "$result" == *"requires an interactive terminal"* ]]; then
+    ok "server-toolkit tui reaches bin/tui (correctly refuses non-TTY invocation)"
+else
+    bad "server-toolkit tui did not correctly dispatch to bin/tui (got: '$result')"
+fi
+
+echo "== tui: non-TTY invocation is refused cleanly =="
+"${BIN_DIR}/tui" </dev/null >/tmp/toolkit_test_tui_notty.out 2>/tmp/toolkit_test_tui_notty.err
+rc=$?
+if [[ "$rc" -eq 1 ]] && grep -q 'requires an interactive terminal' /tmp/toolkit_test_tui_notty.err; then
+    ok "bin/tui refuses to start without a TTY, with a clear message and exit 1"
+else
+    bad "bin/tui did not refuse non-TTY invocation correctly (rc=$rc, stderr: $(cat /tmp/toolkit_test_tui_notty.err))"
+fi
+if ! grep -qiE 'traceback|line [0-9]+:.*unbound|syntax error' /tmp/toolkit_test_tui_notty.err; then
+    ok "bin/tui's non-TTY error contains no raw Bash internal error text"
+else
+    bad "bin/tui leaked a raw Bash internal error on non-TTY invocation: $(cat /tmp/toolkit_test_tui_notty.err)"
+fi
+
+echo "== tui: TUI_ONCE mode renders one frame and exits 0 without touching terminal modes =="
+if result="$(TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null 2>/tmp/toolkit_test_tui_once.err)"; then
+    grep -q 'server-toolkit tui' <<<"$result" && ok "TUI_ONCE=1 renders a frame and exits 0" \
+        || bad "TUI_ONCE=1 output did not contain the expected header"
+else
+    bad "TUI_ONCE=1 exited non-zero: $(cat /tmp/toolkit_test_tui_once.err)"
+fi
+
+echo "== tui: key-action mapping (pure function, no terminal needed) =="
+CASES_INPUT=$'q\nQ\nr\nR\nh\nH\n?\n\nx\n5'
+CASES_EXPECT=("quit" "quit" "refresh" "refresh" "help" "help" "help" "timeout" "ignore" "ignore")
+i=0
+while IFS= read -r case_key; do
+    got="$(bash -c '
+        source "'"${LIB_DIR}"'/common.sh"
+        source "'"${LIB_DIR}"'/status.sh"
+        source "'"${LIB_DIR}"'/config.sh"
+        source "'"${LIB_DIR}"'/modules.sh"
+        source "'"${BIN_DIR}"'/tui"
+        tui_key_action "$1"
+    ' _ "$case_key")"
+    expected="${CASES_EXPECT[$i]}"
+    if [[ "$got" == "$expected" ]]; then
+        ok "tui_key_action('$case_key') == '$expected'"
+    else
+        bad "tui_key_action('$case_key') expected '$expected', got '$got'"
+    fi
+    i=$(( i + 1 ))
+done <<<"$CASES_INPUT"
+
+echo "== tui: layout mode reacts to terminal width deterministically =="
+result="$(bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    source "'"${BIN_DIR}"'/tui"
+    tui_layout_mode 40
+')"
+[[ "$result" == "narrow" ]] && ok "tui_layout_mode(40) is narrow (below TUI_MIN_FULL_WIDTH)" \
+    || bad "tui_layout_mode(40) should be narrow, got '$result'"
+result="$(bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    source "'"${BIN_DIR}"'/tui"
+    tui_layout_mode 120
+')"
+[[ "$result" == "full" ]] && ok "tui_layout_mode(120) is full (at or above TUI_MIN_FULL_WIDTH)" \
+    || bad "tui_layout_mode(120) should be full, got '$result'"
+result="$(bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    source "'"${BIN_DIR}"'/tui"
+    tui_layout_mode notanumber
+')"
+[[ "$result" == "full" ]] && ok "tui_layout_mode with a non-numeric width falls back to the 80-column default (full)" \
+    || bad "tui_layout_mode with non-numeric input did not fall back safely, got '$result'"
+
+echo "== tui: NO_COLOR disables color output =="
+result="$(NO_COLOR=1 bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    source "'"${BIN_DIR}"'/tui"
+    tui_color_enabled && echo yes || echo no
+')"
+[[ "$result" == "no" ]] && ok "NO_COLOR=1 disables tui_color_enabled" \
+    || bad "NO_COLOR did not disable color (got '$result')"
+
+echo "== tui: color is disabled when stdout is not a terminal (non-interactive test context) =="
+result="$(env -u NO_COLOR bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    source "'"${BIN_DIR}"'/tui"
+    tui_color_enabled && echo yes || echo no
+')"
+[[ "$result" == "no" ]] && ok "color is disabled when stdout is not a real terminal, even with NO_COLOR unset" \
+    || bad "tui_color_enabled did not correctly detect a non-terminal stdout (got '$result')"
+
+echo "== tui: config loading (TUI_REFRESH_INTERVAL) =="
+TUI_TMP="$(mktemp -d)"
+result="$(TOOLKIT_CONFIG_DIR="${TUI_TMP}/nope" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    config_get TUI_REFRESH_INTERVAL 5 positive_integer
+')"
+[[ "$result" == "5" ]] && ok "TUI_REFRESH_INTERVAL defaults to 5 with no config" \
+    || bad "TUI_REFRESH_INTERVAL did not default to 5 (got '$result')"
+mkdir -p "${TUI_TMP}/custom"
+printf 'TUI_REFRESH_INTERVAL=10\n' > "${TUI_TMP}/custom/config"
+chmod 600 "${TUI_TMP}/custom/config"
+result="$(TOOLKIT_CONFIG_DIR="${TUI_TMP}/custom" bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    config_get TUI_REFRESH_INTERVAL 5 positive_integer
+')"
+[[ "$result" == "10" ]] && ok "TUI_REFRESH_INTERVAL respects a configured value" \
+    || bad "TUI_REFRESH_INTERVAL did not pick up the configured value (got '$result')"
+rm -rf "$TUI_TMP"
+
+echo "== tui: no destructive commands, no eval, no shell injection (static checks) =="
+if ! grep -qE '\brm\b|\btruncate\b|\bmkfs\b|\bdd\b|shutdown|reboot|systemctl (restart|stop|start)|docker (rm|rmi|stop|kill|restart|prune)|iptables|ufw (enable|disable)' "${BIN_DIR}/tui"; then
+    ok "bin/tui contains no destructive commands"
+else
+    bad "bin/tui appears to contain a destructive command"
+fi
+if ! grep -qE '\beval\b' "${BIN_DIR}/tui"; then
+    ok "bin/tui contains no 'eval'"
+else
+    bad "bin/tui contains 'eval' - forbidden by this sprint's design"
+fi
+if ! grep -vE '^\s*#' "${BIN_DIR}/tui" | grep -qE '\b(bash|sh)\s+-c\b'; then
+    ok "bin/tui contains no 'bash -c'/'sh -c' outside comments"
+else
+    bad "bin/tui contains 'bash -c' or 'sh -c' outside comments - forbidden by this sprint's design"
+fi
+
+echo "== tui: keyboard input injection payload is never executed (canary) =="
+rm -f /tmp/tui-pwned
+result="$(bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    source "'"${BIN_DIR}"'/tui"
+    tui_key_action "$(printf "; touch /tmp/tui-pwned")"
+')"
+if [[ ! -e /tmp/tui-pwned ]] && [[ "$result" == "ignore" ]]; then
+    ok "a shell-metacharacter payload as a keypress is never executed, only matched against the fixed whitelist (mapped to 'ignore')"
+else
+    bad "SECURITY: an injection payload as a keypress was not handled safely (marker exists: $([[ -e /tmp/tui-pwned ]] && echo yes || echo no), result: '$result')"
+fi
+rm -f /tmp/tui-pwned
 
 echo
 echo "Results: ${pass} passed, ${fail} failed"

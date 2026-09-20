@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# tui - interactive terminal dashboard for server-toolkit (Sprint 14).
+#
+# Pure Bash, zero new dependencies - reuses the exact same lib/*.sh
+# diagnostic functions bin/info already calls; this file only adds a
+# rendering/interaction layer on top, it never recomputes how any metric
+# is gathered. See docs/tui.md for the user-facing guide.
+#
+# TUI_ONCE=1 (env var) renders exactly one frame to plain stdout and
+# exits 0 - it never touches terminal modes (no alternate screen, no raw
+# input read, no TTY requirement), so it is safe to run non-interactively.
+# This is how almost all of this sprint's automated tests drive the real
+# rendering code, since a genuine interactive session can't be scripted.
+#
+# SECURITY: keyboard input is only ever compared against a fixed
+# whitelist of single characters (tui_key_action, below) - never
+# dynamically interpreted as code, never bash -c/sh -c, never used to
+# build a command or a path.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
+
+# shellcheck source=../lib/common.sh
+source "${LIB_DIR}/common.sh"
+# shellcheck source=../lib/system.sh
+source "${LIB_DIR}/system.sh"
+# shellcheck source=../lib/gpu.sh
+source "${LIB_DIR}/gpu.sh"
+# shellcheck source=../lib/docker.sh
+source "${LIB_DIR}/docker.sh"
+# shellcheck source=../lib/services.sh
+source "${LIB_DIR}/services.sh"
+# shellcheck source=../lib/security.sh
+source "${LIB_DIR}/security.sh"
+# shellcheck source=../lib/process.sh
+source "${LIB_DIR}/process.sh"
+# shellcheck source=../lib/logs.sh
+source "${LIB_DIR}/logs.sh"
+# shellcheck source=../lib/status.sh
+source "${LIB_DIR}/status.sh"
+# shellcheck source=../lib/config.sh
+source "${LIB_DIR}/config.sh"
+# shellcheck source=../lib/modules.sh
+source "${LIB_DIR}/modules.sh"
+
+# The one place this version string is defined.
+TOOLKIT_TUI_VERSION="0.14.0-dev"
+
+# Below this many columns, the dashboard renders as a single-column,
+# unboxed label:value listing instead of the two-column boxed layout.
+TUI_MIN_FULL_WIDTH=70
+
+# ------------------------------------------------------- pure helpers ---
+# Everything in this section takes explicit arguments (or checks only
+# well-defined environment/tput state) and produces output or an exit
+# status with no other side effect - testable by calling directly, no
+# terminal required.
+
+# True (exit 0) iff color output should be used: NO_COLOR unset, stdout
+# is a real terminal, and that terminal reports at least 8 colors.
+tui_color_enabled() {
+    [[ -n "${NO_COLOR:-}" ]] && return 1
+    [[ -t 1 ]] || return 1
+    local n
+    n="$(tput colors 2>/dev/null)" || return 1
+    [[ "$n" =~ ^[0-9]+$ ]] && [[ "$n" -ge 8 ]]
+}
+
+# Prints "full" or "narrow" for a given column count (defaults to the
+# real terminal width via tput, falling back to 80 if that fails - same
+# fallback lib/common.sh::term_width already uses).
+tui_layout_mode() {
+    local cols="${1:-}"
+    if [[ -z "$cols" ]]; then
+        cols="$(tput cols 2>/dev/null)" || cols=""
+    fi
+    [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
+    if [[ "$cols" -ge "$TUI_MIN_FULL_WIDTH" ]]; then
+        printf 'full'
+    else
+        printf 'narrow'
+    fi
+}
+
+# Maps one keypress character to an action name. The empty string means
+# "read timed out, no key was pressed" (an automatic refresh tick).
+# Anything not explicitly listed maps to "ignore" - a fixed whitelist,
+# never a fallthrough that could be misused as a dispatch table for
+# arbitrary input.
+tui_key_action() {
+    case "${1:-}" in
+        q|Q) printf 'quit' ;;
+        r|R) printf 'refresh' ;;
+        h|H|'?') printf 'help' ;;
+        '') printf 'timeout' ;;
+        *) printf 'ignore' ;;
+    esac
+}
+
+# Prints two blocks of already-rendered text side by side, each padded
+# to $col_width, separated by " | ". Pads the shorter block with blank
+# lines. Deliberately plain-ASCII-only in practice (see docs/tui.md) -
+# padding is byte-width, not display-width, so a UTF-8 status glyph
+# embedded in a column would misalign; panel content that uses glyphs
+# (the ALERTS section) is rendered full-width, never inside a column.
+tui_two_col() {
+    local left="$1" right="$2" col_width="$3"
+    local -a left_lines right_lines
+    mapfile -t left_lines <<<"$left"
+    mapfile -t right_lines <<<"$right"
+    local max="${#left_lines[@]}"
+    [[ "${#right_lines[@]}" -gt "$max" ]] && max="${#right_lines[@]}"
+    local i l r
+    for (( i = 0; i < max; i++ )); do
+        l="${left_lines[i]:-}"
+        r="${right_lines[i]:-}"
+        l="$(truncate_text "$l" "$col_width")"
+        printf '%-*s | %s\n' "$col_width" "$l" "$r"
+    done
+}
+
+# ------------------------------------------------------------ screens ---
+
+tui_render_help() {
+    cat <<EOF
+server-toolkit tui ${TOOLKIT_TUI_VERSION}
+
+KEYS:
+  r        refresh now
+  h or ?   toggle this help
+  q        quit
+
+Refresh interval: $(config_get TUI_REFRESH_INTERVAL 5 positive_integer)s (TUI_REFRESH_INTERVAL in config)
+Config file:      $(config_path)
+
+Press any key to return.
+EOF
+}
+
+# Task 1 ships a placeholder - Task 2 replaces this function's body with
+# the real SERVER/SYSTEM/GPU/NETWORK/DOCKER/SERVICES/SECURITY/ALERTS
+# panels. The name, zero-argument signature, and "prints the frame to
+# stdout" contract are fixed by this task and must not change.
+tui_render_overview() {
+    printf 'server-toolkit tui %s\n' "$TOOLKIT_TUI_VERSION"
+    printf 'Loading overview...\n'
+}
+
+# ------------------------------------------------------- terminal I/O ---
+
+TUI_ORIG_STTY=""
+TUI_SHOWING_HELP=0
+
+tui_cleanup() {
+    tput cnorm 2>/dev/null || true
+    tput rmcup 2>/dev/null || true
+    [[ -n "$TUI_ORIG_STTY" ]] && stty "$TUI_ORIG_STTY" 2>/dev/null || true
+}
+
+tui_render_frame() {
+    tput clear 2>/dev/null || true
+    if [[ "$TUI_SHOWING_HELP" -eq 1 ]]; then
+        tui_render_help
+    else
+        tui_render_overview
+    fi
+}
+
+tui_main() {
+    if [[ -z "${TUI_ONCE:-}" ]]; then
+        if [[ ! -t 0 || ! -t 1 ]]; then
+            printf 'server-toolkit tui: requires an interactive terminal (stdin/stdout must both be a TTY)\n' >&2
+            exit 1
+        fi
+    fi
+
+    if [[ -n "${TUI_ONCE:-}" ]]; then
+        tui_render_overview
+        exit 0
+    fi
+
+    TUI_ORIG_STTY="$(stty -g 2>/dev/null)" || TUI_ORIG_STTY=""
+    trap tui_cleanup EXIT INT TERM
+    tput smcup 2>/dev/null || true
+    tput civis 2>/dev/null || true
+
+    local interval key action
+    interval="$(config_get TUI_REFRESH_INTERVAL 5 positive_integer)"
+
+    while true; do
+        tui_render_frame
+        key=""
+        read -t "$interval" -n 1 -s key || true
+        action="$(tui_key_action "$key")"
+        case "$action" in
+            quit) break ;;
+            help) TUI_SHOWING_HELP=$(( 1 - TUI_SHOWING_HELP )) ;;
+            refresh|timeout|ignore) : ;;
+        esac
+    done
+}
+
+# Only run the interactive loop when this file is executed directly, not
+# when it's sourced (e.g. by tests, to call the pure functions above in
+# isolation without triggering the loop or the TTY check).
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    tui_main
+fi
