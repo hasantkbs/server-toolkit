@@ -181,7 +181,16 @@ tui_main() {
     fi
 
     TUI_ORIG_STTY="$(stty -g 2>/dev/null)" || TUI_ORIG_STTY=""
-    trap tui_cleanup EXIT INT TERM
+    # A trapped signal's handler returning normally resumes execution in
+    # bash rather than terminating the process - so INT/TERM need their
+    # own handlers that explicitly exit (with the conventional
+    # 128+signal exit codes) after cleanup, not just the shared EXIT
+    # trap. tui_cleanup is idempotent (every line ends in `|| true`), so
+    # running it twice on a signal path (once here, once again from the
+    # exit it triggers) is safe.
+    trap tui_cleanup EXIT
+    trap 'tui_cleanup; exit 130' INT
+    trap 'tui_cleanup; exit 143' TERM
     tput smcup 2>/dev/null || true
     tput civis 2>/dev/null || true
 

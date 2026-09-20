@@ -4114,10 +4114,53 @@ fi
 
 echo "== tui: TUI_ONCE mode renders one frame and exits 0 without touching terminal modes =="
 if result="$(TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null 2>/tmp/toolkit_test_tui_once.err)"; then
-    grep -q 'server-toolkit tui' <<<"$result" && ok "TUI_ONCE=1 renders a frame and exits 0" \
-        || bad "TUI_ONCE=1 output did not contain the expected header"
+    if grep -q 'server-toolkit tui' <<<"$result" && ! grep -q $'\033' <<<"$result"; then
+        ok "TUI_ONCE=1 renders a frame, exits 0, and emits no escape-sequence bytes (genuinely no terminal-mode changes)"
+    else
+        bad "TUI_ONCE=1 output did not contain the expected header, or contained an escape byte (terminal-mode change)"
+    fi
 else
     bad "TUI_ONCE=1 exited non-zero: $(cat /tmp/toolkit_test_tui_once.err)"
+fi
+
+echo "== tui: trap is registered before any terminal-mode change (line-order static check) =="
+trap_line="$(grep -n "trap tui_cleanup EXIT" "${BIN_DIR}/tui" | head -n1 | cut -d: -f1)"
+smcup_line="$(grep -n "tput smcup" "${BIN_DIR}/tui" | head -n1 | cut -d: -f1)"
+if [[ -n "$trap_line" && -n "$smcup_line" && "$trap_line" -lt "$smcup_line" ]]; then
+    ok "trap registration (line $trap_line) precedes the first terminal-mode change, tput smcup (line $smcup_line)"
+else
+    bad "trap registration does not precede tput smcup (trap_line=$trap_line, smcup_line=$smcup_line)"
+fi
+
+echo "== tui: SIGINT (Ctrl-C) terminates the interactive loop within a bounded time =="
+if command -v script >/dev/null 2>&1; then
+    TUI_TMP3="$(mktemp -d)"
+    mkdir -p "${TUI_TMP3}/sigtest"
+    TOOLKIT_CONFIG_DIR="${TUI_TMP3}/sigtest" script -qec "${BIN_DIR}/tui" /dev/null >/dev/null 2>&1 &
+    script_pid=$!
+    sleep 1
+    tui_pid="$(pgrep -f "${BIN_DIR}/tui" | head -n1)"
+    if [[ -n "$tui_pid" ]]; then
+        kill -INT "$tui_pid" 2>/dev/null
+        waited=0
+        while kill -0 "$tui_pid" 2>/dev/null && [[ "$waited" -lt 5 ]]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+        if kill -0 "$tui_pid" 2>/dev/null; then
+            bad "bin/tui did not terminate within 5s of SIGINT - Ctrl-C does not cleanly quit"
+            kill -KILL "$tui_pid" 2>/dev/null
+        else
+            ok "bin/tui terminates promptly on SIGINT (Ctrl-C), not left running (waited ${waited}s)"
+        fi
+    else
+        bad "could not locate the bin/tui process to send SIGINT to (script/pty setup may have failed)"
+    fi
+    kill -KILL "$script_pid" 2>/dev/null
+    wait "$script_pid" 2>/dev/null
+    rm -rf "$TUI_TMP3"
+else
+    ok "script command not available - skipping SIGINT pty test (environment limitation, not a code issue)"
 fi
 
 echo "== tui: key-action mapping (pure function, no terminal needed) =="
@@ -4256,6 +4299,36 @@ else
     bad "SECURITY: an injection payload as a keypress was not handled safely (marker exists: $([[ -e /tmp/tui-pwned ]] && echo yes || echo no), result: '$result')"
 fi
 rm -f /tmp/tui-pwned
+
+result="$(bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    source "'"${BIN_DIR}"'/tui"
+    tui_key_action "*"
+')"
+if [[ "$result" == "ignore" ]]; then
+    ok "a glob-metacharacter key ('*') is never pattern-expanded, only compared as a literal (mapped to 'ignore')"
+else
+    bad "SECURITY: a glob-metacharacter key was not handled safely (result: '$result')"
+fi
+
+rm -f /tmp/tui-pwned2
+result="$(bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    source "'"${BIN_DIR}"'/tui"
+    tui_key_action "$(printf "\$(touch /tmp/tui-pwned2)")"
+')"
+if [[ ! -e /tmp/tui-pwned2 ]] && [[ "$result" == "ignore" ]]; then
+    ok "a \$(...) command-substitution payload as a keypress is never executed, only matched against the fixed whitelist (mapped to 'ignore')"
+else
+    bad "SECURITY: a \$(...) injection payload as a keypress was not handled safely (marker exists: $([[ -e /tmp/tui-pwned2 ]] && echo yes || echo no), result: '$result')"
+fi
+rm -f /tmp/tui-pwned2
 
 echo
 echo "Results: ${pass} passed, ${fail} failed"
