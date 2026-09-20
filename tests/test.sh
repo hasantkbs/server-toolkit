@@ -4136,10 +4136,12 @@ echo "== tui: SIGINT (Ctrl-C) terminates the interactive loop within a bounded t
 if command -v script >/dev/null 2>&1; then
     TUI_TMP3="$(mktemp -d)"
     mkdir -p "${TUI_TMP3}/sigtest"
+    set -m
     TOOLKIT_CONFIG_DIR="${TUI_TMP3}/sigtest" script -qec "${BIN_DIR}/tui" /dev/null >/dev/null 2>&1 &
     script_pid=$!
+    set +m
     sleep 1
-    tui_pid="$(pgrep -f "${BIN_DIR}/tui" | head -n1)"
+    tui_pid="$(pgrep -P "$script_pid" | head -n1)"
     if [[ -n "$tui_pid" ]]; then
         kill -INT "$tui_pid" 2>/dev/null
         waited=0
