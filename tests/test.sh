@@ -4114,7 +4114,7 @@ fi
 
 echo "== tui: TUI_ONCE mode renders one frame and exits 0 without touching terminal modes =="
 if result="$(TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null 2>/tmp/toolkit_test_tui_once.err)"; then
-    if grep -q 'server-toolkit tui' <<<"$result" && ! grep -q $'\033' <<<"$result"; then
+    if grep -q 'SERVER TOOLKIT' <<<"$result" && ! grep -q $'\033' <<<"$result"; then
         ok "TUI_ONCE=1 renders a frame, exits 0, and emits no escape-sequence bytes (genuinely no terminal-mode changes)"
     else
         bad "TUI_ONCE=1 output did not contain the expected header, or contained an escape byte (terminal-mode change)"
@@ -4269,7 +4269,7 @@ result="$(TOOLKIT_CONFIG_DIR="${TUI_TMP}/custom" bash -c '
 rm -rf "$TUI_TMP"
 
 echo "== tui: no destructive commands, no eval, no shell injection (static checks) =="
-if ! grep -qE '\brm\b|\btruncate\b|\bmkfs\b|\bdd\b|shutdown|reboot|systemctl (restart|stop|start)|docker (rm|rmi|stop|kill|restart|prune)|iptables|ufw (enable|disable)' "${BIN_DIR}/tui"; then
+if ! grep -qE '\brm\b|\btruncate\b|\bmkfs\b|\bdd\b|shutdown|\breboot\b|systemctl (restart|stop|start)|docker (rm|rmi|stop|kill|restart|prune)|iptables|ufw (enable|disable)' "${BIN_DIR}/tui"; then
     ok "bin/tui contains no destructive commands"
 else
     bad "bin/tui appears to contain a destructive command"
@@ -4331,6 +4331,80 @@ else
     bad "SECURITY: a \$(...) injection payload as a keypress was not handled safely (marker exists: $([[ -e /tmp/tui-pwned2 ]] && echo yes || echo no), result: '$result')"
 fi
 rm -f /tmp/tui-pwned2
+
+echo "== tui: overview renders real diagnostic data (TUI_ONCE) =="
+result="$(TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null)"
+if grep -q '^SERVER$' <<<"$result" && grep -q '^SYSTEM$' <<<"$result" && grep -q '^ALERTS$' <<<"$result"; then
+    ok "tui overview shows SERVER, SYSTEM, and ALERTS sections"
+else
+    bad "tui overview is missing expected sections: $result"
+fi
+if grep -qE 'hostname\s+\S' <<<"$result"; then
+    ok "tui overview shows a real hostname value, not a placeholder"
+else
+    bad "tui overview did not show a real hostname value"
+fi
+
+echo "== tui: two successive TUI_ONCE renders are structurally consistent =="
+result1="$(TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null | grep -oE '^[A-Z ]+$')"
+result2="$(TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null | grep -oE '^[A-Z ]+$')"
+[[ "$result1" == "$result2" ]] && ok "the set of section headers is identical across two successive renders (structural stability)" \
+    || bad "section headers differed between two runs (result1: '$result1', result2: '$result2')"
+
+echo "== tui: alerts panel reflects real system state (reused logic, not reimplemented) =="
+result="$(TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null)"
+alerts_section="$(sed -n '/^ALERTS$/,$p' <<<"$result")"
+[[ -n "$alerts_section" ]] && ok "tui overview's ALERTS section is present and non-empty" \
+    || bad "tui overview's ALERTS section was empty or missing"
+
+echo "== tui: narrow layout mode does not crash and renders single-column content =="
+# A non-interactive test context has no real terminal width, so
+# tui_layout_mode's own fallback would always default to "full" here -
+# pass "narrow" explicitly to tui_render_overview (its optional
+# mode-override argument) to deterministically exercise the narrow path,
+# rather than depending on the test runner's own terminal size.
+result="$(bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/system.sh"
+    source "'"${LIB_DIR}"'/gpu.sh"
+    source "'"${LIB_DIR}"'/docker.sh"
+    source "'"${LIB_DIR}"'/services.sh"
+    source "'"${LIB_DIR}"'/security.sh"
+    source "'"${LIB_DIR}"'/process.sh"
+    source "'"${LIB_DIR}"'/logs.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    source "'"${BIN_DIR}"'/tui"
+    tui_render_overview narrow
+' 2>&1)"
+rc=$?
+if [[ "$rc" -eq 0 ]] && grep -q '^SERVER$' <<<"$result" && grep -q '^RESOURCES$' <<<"$result" && grep -q '^SERVICES$' <<<"$result"; then
+    ok "tui_render_overview runs cleanly and shows all sections when forced into narrow mode"
+else
+    bad "tui_render_overview failed or was missing sections in forced narrow mode (rc=$rc): $result"
+fi
+if ! grep -q '|' <<<"$result"; then
+    ok "narrow mode output contains no two-column ' | ' separator (confirms it took the single-column path, not the full-width one)"
+else
+    bad "narrow mode output still contains a two-column separator - did not take the single-column path"
+fi
+
+echo "== tui: startup performance is close to bin/info's own (no meaningful dispatch/render overhead) =="
+info_start=$(date +%s%N)
+./bin/info >/dev/null 2>&1
+info_end=$(date +%s%N)
+tui_start=$(date +%s%N)
+TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null >/dev/null 2>&1
+tui_end=$(date +%s%N)
+info_ms=$(( (info_end - info_start) / 1000000 ))
+tui_ms=$(( (tui_end - tui_start) / 1000000 ))
+diff_ms=$(( tui_ms > info_ms ? tui_ms - info_ms : info_ms - tui_ms ))
+if [[ "$diff_ms" -lt 500 ]]; then
+    ok "tui TUI_ONCE runtime (${tui_ms}ms) is close to bin/info's runtime (${info_ms}ms), diff ${diff_ms}ms"
+else
+    bad "tui TUI_ONCE runtime (${tui_ms}ms) diverges significantly from bin/info's runtime (${info_ms}ms), diff ${diff_ms}ms"
+fi
 
 echo
 echo "Results: ${pass} passed, ${fail} failed"

@@ -138,13 +138,207 @@ Press any key to return.
 EOF
 }
 
-# Task 1 ships a placeholder - Task 2 replaces this function's body with
-# the real SERVER/SYSTEM/GPU/NETWORK/DOCKER/SERVICES/SECURITY/ALERTS
-# panels. The name, zero-argument signature, and "prints the frame to
-# stdout" contract are fixed by this task and must not change.
+# Same alert thresholds bin/info uses - duplicated here deliberately
+# rather than refactoring bin/info to share them (see the plan's Global
+# Constraints for the rationale). Keep these in sync with bin/info by
+# hand if either changes.
+TUI_DISK_ALERT_PCT=80
+TUI_SWAP_ALERT_PCT=10
+TUI_CPU_ALERT_THRESHOLD=90
+TUI_LOG_ERROR_LOOKBACK="24 hours ago"
+TUI_LOG_ERROR_TIMEOUT=1
+
+tui_strip_pct() {
+    local v="${1:-}"
+    v="${v%\%}"
+    [[ "$v" =~ ^[0-9]+$ ]] && printf '%s' "$v" || printf ''
+}
+
+# Each of these builds one panel's display text and returns it via
+# stdout only - none of them needs to communicate anything back to the
+# caller's scope, so capturing their output via $(...) (which runs them
+# in a subshell) is safe. Contrast with the alert-relevant numbers in
+# tui_render_overview below, which are deliberately computed inline,
+# never inside a function like these.
+
+tui_content_docker() {
+    local docker_version
+    docker_version="$(get_docker_version)"
+    if [[ -n "$docker_version" ]]; then
+        local running total healthy
+        read -r running total <<<"$(get_docker_container_counts)"
+        healthy="$(get_docker_healthy_count)"
+        printf 'DOCKER\n'
+        printf '  %-10s %s\n' "Containers" "$total"
+        printf '  %-10s %s\n' "Running" "$running"
+        [[ -n "$healthy" ]] && printf '  %-10s %s\n' "Healthy" "$healthy"
+    else
+        printf 'DOCKER\n  unavailable\n'
+    fi
+}
+
+tui_content_gpu() {
+    local gpu_list
+    if gpu_list="$(get_gpu_list)" && [[ -n "$gpu_list" ]]; then
+        local idx name driver util mem_used mem_total temp power_draw power_limit
+        IFS=',' read -r idx name driver util mem_used mem_total temp power_draw power_limit <<<"$(head -n1 <<<"$gpu_list")"
+        name="$(gpu_trim "$name")"
+        util="$(gpu_clean_field "$util")"
+        [[ "$util" != "N/A" ]] && util="${util}%"
+        printf 'GPU\n'
+        printf '  %-10s %s\n' "Status" "Available"
+        printf '  %-10s %s\n' "Model" "$name"
+        printf '  %-10s %s\n' "Util" "$util"
+    else
+        printf 'GPU\n  N/A\n'
+    fi
+}
+
+tui_content_network() {
+    local iface
+    iface="$(get_primary_interface)"
+    if [[ -n "$iface" ]]; then
+        printf 'NETWORK\n'
+        printf '  %-10s %s\n' "Interface" "$iface"
+        printf '  %-10s %s\n' "State" "$(get_interface_state "$iface")"
+        printf '  %-10s %s\n' "IPv4" "$(get_ipv4_address "$iface")"
+    else
+        printf 'NETWORK\n  N/A\n'
+    fi
+}
+
+tui_content_security() {
+    printf 'SECURITY\n'
+    printf '  %-10s %s\n' "UFW" "$(get_ufw_status)"
+    printf '  %-10s %s\n' "Reboot" "$(get_reboot_required)"
+}
+
+# $1 (optional) overrides the layout mode ("full" or "narrow") instead
+# of measuring the real terminal via tui_layout_mode - lets tests force
+# the narrow path deterministically, since a non-interactive test
+# context has no real terminal width for tui_layout_mode to measure and
+# would otherwise always fall back to its 80-column ("full") default.
 tui_render_overview() {
-    printf 'server-toolkit tui %s\n' "$TOOLKIT_TUI_VERSION"
-    printf 'Loading overview...\n'
+    printf 'SERVER TOOLKIT%*s%s\n' 46 "" "${TOOLKIT_TUI_VERSION}"
+    printf '\n'
+
+    local mode="${1:-}"
+    [[ -z "$mode" ]] && mode="$(tui_layout_mode)"
+
+    # --- gather everything the ALERTS section needs, once, right here -
+    # never inside a function whose output gets captured (see this
+    # task's design note above for why that would silently lose state).
+    local ram_alert_pct
+    ram_alert_pct="$(config_get RAM_ALERT_PCT 90 percentage)"
+    local ram_used ram_total ram_pct swap_used swap_total swap_pct disk_used disk_total disk_pct
+    read -r ram_used ram_total ram_pct <<<"$(get_ram_stats)"
+    read -r swap_used swap_total swap_pct <<<"$(get_swap_stats)"
+    read -r disk_used disk_total disk_pct <<<"$(get_disk_stats)"
+
+    local running_count="N/A" failed_count=0
+    if systemd_available; then
+        local all_units failed_units
+        all_units="$(get_all_service_units)" || all_units=""
+        running_count=0
+        [[ -n "$all_units" ]] && running_count="$(awk -F'|' '$3=="active"' <<<"$all_units" | wc -l | tr -d '[:space:]')"
+        failed_units="$(get_failed_service_units)" || failed_units=""
+        [[ -n "$failed_units" ]] && failed_count="$(wc -l <<<"$failed_units" | tr -d '[:space:]')"
+    fi
+
+    local alerts=()
+    local disk_num ram_num swap_num
+    disk_num="$(tui_strip_pct "$disk_pct")"
+    [[ -n "$disk_num" && "$disk_num" -ge "$TUI_DISK_ALERT_PCT" ]] && \
+        add_alert alerts WARN system "Root disk usage is ${disk_pct}"
+    ram_num="$(tui_strip_pct "$ram_pct")"
+    [[ -n "$ram_num" && "$ram_num" -ge "$ram_alert_pct" ]] && \
+        add_alert alerts WARN system "RAM usage is ${ram_pct}"
+    swap_num="$(tui_strip_pct "$swap_pct")"
+    [[ -n "$swap_num" && "$swap_num" -ge "$TUI_SWAP_ALERT_PCT" ]] && \
+        add_alert alerts WARN system "Swap usage is ${swap_pct} (${swap_used} bytes used)"
+    if [[ "$failed_count" =~ ^[0-9]+$ ]] && [[ "$failed_count" -gt 0 ]]; then
+        add_alert alerts WARN services "${failed_count} failed systemd service(s)"
+    fi
+    if snapshot="$(get_process_snapshot)" && [[ -n "$snapshot" ]]; then
+        local high_cpu_count
+        high_cpu_count="$(count_above_threshold "$snapshot" 4 "$TUI_CPU_ALERT_THRESHOLD")"
+        [[ "$high_cpu_count" =~ ^[0-9]+$ && "$high_cpu_count" -gt 0 ]] && \
+            add_alert alerts WARN process "${high_cpu_count} process(es) above ${TUI_CPU_ALERT_THRESHOLD}% CPU"
+    fi
+    if journalctl_available; then
+        local error_count
+        error_count="$(get_journal_level_count "err..emerg" "$TUI_LOG_ERROR_LOOKBACK" "$TUI_LOG_ERROR_TIMEOUT")" || error_count=""
+        [[ "$error_count" =~ ^[0-9]+$ && "$error_count" -gt 0 ]] && \
+            add_alert alerts WARN logs "${error_count} error-level journal entries in the last 24h"
+    fi
+    # TASK-3-INSERTION-POINT: Task 3 adds "tui_gather_module_alerts alerts"
+    # here, after the above and before the panels render below.
+
+    # --- render the panels. resources_content/services_content are
+    # built as inline command substitutions (not named functions) since
+    # they only need the numbers already computed above, passed in as
+    # literal values - this is safe one-way data flow INTO a subshell,
+    # not the broken pattern of relying on a subshell's assignment
+    # propagating back OUT.
+    printf 'SERVER\n'
+    printf '  %-12s %s\n' "hostname" "$(get_hostname)"
+    printf '  %-12s %s\n' "OS" "$(get_os_pretty_name)"
+    printf '  %-12s %s\n' "kernel" "$(get_kernel_version)"
+    printf '  %-12s %s\n' "uptime" "$(get_uptime_human)"
+    printf '  %-12s %s\n' "load" "$(get_load_average)"
+    printf '\n'
+
+    printf 'SYSTEM\n'
+    printf '  %-12s %s\n' "CPU" "$(get_cpu_model) ($(get_cpu_topology))"
+    if [[ "$ram_total" =~ ^[0-9]+$ ]]; then
+        printf '  %-12s %s\n' "RAM" "$(bytes_to_human "$ram_used") / $(bytes_to_human "$ram_total") (${ram_pct})"
+    else
+        printf '  %-12s %s\n' "RAM" "N/A"
+    fi
+    if [[ "$swap_total" =~ ^[0-9]+$ ]] && [[ "$swap_total" -gt 0 ]]; then
+        printf '  %-12s %s\n' "SWAP" "$(bytes_to_human "$swap_used") / $(bytes_to_human "$swap_total") (${swap_pct})"
+    elif [[ "$swap_total" == "0" ]]; then
+        printf '  %-12s %s\n' "SWAP" "none configured"
+    else
+        printf '  %-12s %s\n' "SWAP" "N/A"
+    fi
+    if [[ "$disk_total" =~ ^[0-9]+$ ]]; then
+        printf '  %-12s %s\n' "DISK" "$(bytes_to_human "$disk_used") / $(bytes_to_human "$disk_total") (${disk_pct})"
+    else
+        printf '  %-12s %s\n' "DISK" "N/A"
+    fi
+    printf '\n'
+
+    local resources_content services_content docker_content gpu_content network_content security_content
+    resources_content="$(printf 'RESOURCES\n  %-10s %s\n  %-10s %s\n' "Memory" "${ram_pct:-N/A}" "Disk" "${disk_pct:-N/A}")"
+    services_content="$(printf 'SERVICES\n  %-10s %s\n  %-10s %s\n' "Running" "$running_count" "Failed" "$failed_count")"
+    if [[ "$mode" == "full" ]]; then
+        tui_two_col "$resources_content" "$services_content" 34
+    else
+        printf '%s\n%s\n' "$resources_content" "$services_content"
+    fi
+    printf '\n'
+
+    docker_content="$(tui_content_docker)"
+    gpu_content="$(tui_content_gpu)"
+    if [[ "$mode" == "full" ]]; then
+        tui_two_col "$docker_content" "$gpu_content" 34
+    else
+        printf '%s\n%s\n' "$docker_content" "$gpu_content"
+    fi
+    printf '\n'
+
+    network_content="$(tui_content_network)"
+    security_content="$(tui_content_security)"
+    if [[ "$mode" == "full" ]]; then
+        tui_two_col "$network_content" "$security_content" 34
+    else
+        printf '%s\n%s\n' "$network_content" "$security_content"
+    fi
+    printf '\n'
+
+    printf 'ALERTS\n'
+    render_alerts alerts "No active alerts"
 }
 
 # ------------------------------------------------------- terminal I/O ---
