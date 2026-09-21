@@ -4436,6 +4436,84 @@ else
     bad "tui overview truncated or failed (rc=$rc) when docker reported no container health data: $result"
 fi
 
+echo "== tui: custom module disabled globally -> never executed =="
+TUI_TMP2="$(mktemp -d)"
+rm -f /tmp/tui-module-pwned-global-off
+mkdir -p "${TUI_TMP2}/globaloff/modules"
+printf 'ENABLED=true\nCOMMAND=touch /tmp/tui-module-pwned-global-off\n' > "${TUI_TMP2}/globaloff/modules/danger.conf"
+chmod 600 "${TUI_TMP2}/globaloff/modules/danger.conf"
+TOOLKIT_CONFIG_DIR="${TUI_TMP2}/globaloff" TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null >/dev/null 2>&1
+if [[ ! -e /tmp/tui-module-pwned-global-off ]]; then
+    ok "tui never runs a module's COMMAND when CUSTOM_MODULES_ENABLED is unset (global gate)"
+else
+    bad "SECURITY: tui ran a module's COMMAND with the global gate off"
+fi
+rm -f /tmp/tui-module-pwned-global-off
+
+echo "== tui: custom module disabled per-module -> never executed even with the global gate on =="
+rm -f /tmp/tui-module-pwned-per-off
+mkdir -p "${TUI_TMP2}/peroff/modules"
+printf 'CUSTOM_MODULES_ENABLED=true\n' > "${TUI_TMP2}/peroff/config"
+chmod 600 "${TUI_TMP2}/peroff/config"
+printf 'ENABLED=false\nCOMMAND=touch /tmp/tui-module-pwned-per-off\n' > "${TUI_TMP2}/peroff/modules/danger.conf"
+chmod 600 "${TUI_TMP2}/peroff/modules/danger.conf"
+TOOLKIT_CONFIG_DIR="${TUI_TMP2}/peroff" TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null >/dev/null 2>&1
+if [[ ! -e /tmp/tui-module-pwned-per-off ]]; then
+    ok "tui never runs a module's COMMAND when that module's own ENABLED=false, even with the global gate on"
+else
+    bad "SECURITY: tui ran a disabled module's COMMAND"
+fi
+rm -f /tmp/tui-module-pwned-per-off
+
+echo "== tui: an enabled module (both gates on) runs and surfaces as an alert =="
+mkdir -p "${TUI_TMP2}/enabled/modules"
+printf 'CUSTOM_MODULES_ENABLED=true\n' > "${TUI_TMP2}/enabled/config"
+chmod 600 "${TUI_TMP2}/enabled/config"
+printf 'ENABLED=true\nCOMMAND=exit 2\n' > "${TUI_TMP2}/enabled/modules/failer.conf"
+chmod 600 "${TUI_TMP2}/enabled/modules/failer.conf"
+result="$(TOOLKIT_CONFIG_DIR="${TUI_TMP2}/enabled" TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null)"
+alerts_section="$(sed -n '/^ALERTS$/,$p' <<<"$result")"
+[[ "$alerts_section" == *"non-zero (2)"* ]] && ok "tui runs an enabled module (both gates on) and surfaces its failure as an alert" \
+    || bad "tui did not surface the enabled module's failure as an alert: $alerts_section"
+
+echo "== tui: a module respects its own timeout (does not hang the render) =="
+mkdir -p "${TUI_TMP2}/timeout/modules"
+printf 'CUSTOM_MODULES_ENABLED=true\n' > "${TUI_TMP2}/timeout/config"
+chmod 600 "${TUI_TMP2}/timeout/config"
+printf 'ENABLED=true\nCOMMAND=sleep 5\nTIMEOUT=1\n' > "${TUI_TMP2}/timeout/modules/slow.conf"
+chmod 600 "${TUI_TMP2}/timeout/modules/slow.conf"
+start_ts=$(date +%s)
+result="$(TOOLKIT_CONFIG_DIR="${TUI_TMP2}/timeout" TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null)"
+end_ts=$(date +%s)
+elapsed=$(( end_ts - start_ts ))
+alerts_section="$(sed -n '/^ALERTS$/,$p' <<<"$result")"
+if [[ "$elapsed" -lt 4 ]] && [[ "$alerts_section" == *"timed out"* ]]; then
+    ok "a slow module's own TIMEOUT bounds the tui render (elapsed ${elapsed}s), reported as timed out"
+else
+    bad "a slow module was not bounded correctly by tui (elapsed ${elapsed}s, alerts: $alerts_section)"
+fi
+rm -rf "$TUI_TMP2"
+
+echo "== tui: help screen shows config path and refresh interval, read-only (no edit affordance) =="
+result="$(bash -c '
+    source "'"${LIB_DIR}"'/common.sh"
+    source "'"${LIB_DIR}"'/status.sh"
+    source "'"${LIB_DIR}"'/config.sh"
+    source "'"${LIB_DIR}"'/modules.sh"
+    source "'"${BIN_DIR}"'/tui"
+    tui_render_help
+')"
+if grep -q 'Config file:' <<<"$result" && grep -qE 'Refresh interval:\s+[0-9]+s' <<<"$result"; then
+    ok "tui help screen shows the config file path and the refresh interval"
+else
+    bad "tui help screen is missing expected config info: $result"
+fi
+if ! grep -qiE '\bset\b|\bedit\b|\bwrite\b' <<<"$result"; then
+    ok "tui help screen contains no config-editing language (strictly read-only, as required)"
+else
+    bad "tui help screen unexpectedly suggests an editing affordance: $result"
+fi
+
 echo
 echo "Results: ${pass} passed, ${fail} failed"
 [[ "$fail" -eq 0 ]]

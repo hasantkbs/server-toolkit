@@ -133,6 +133,7 @@ KEYS:
 
 Refresh interval: $(config_get TUI_REFRESH_INTERVAL 5 positive_integer)s (TUI_REFRESH_INTERVAL in config)
 Config file:      $(config_path)
+Custom modules:   $(modules_enabled && echo enabled || echo disabled)
 
 Press any key to return.
 EOF
@@ -215,6 +216,31 @@ tui_content_security() {
     printf '  %-10s %s\n' "Reboot" "$(get_reboot_required)"
 }
 
+# Only ever reaches run_module when modules_enabled() is true - the same
+# single gate bin/info already checks (Sprint 12). No new gate, no
+# relaxed timeout: this is the identical integration pattern applied a
+# second time, not a new one. Appends WARN/ERROR module outcomes into
+# the caller's alerts array via a nameref, so module-sourced alerts and
+# the built-in threshold alerts render together in one ALERTS section.
+tui_gather_module_alerts() {
+    local -n _tui_module_alerts="$1"
+    modules_enabled || return 0
+
+    local names
+    names="$(discover_modules)"
+    [[ -z "$names" ]] && return 0
+
+    local name status message output
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        IFS=$'\t' read -r status message output <<<"$(run_module "$name")"
+        case "$status" in
+            "$STATUS_WARN") add_alert _tui_module_alerts WARN "module:${name}" "$message" ;;
+            "$STATUS_ERROR") add_alert _tui_module_alerts ERROR "module:${name}" "$message" ;;
+        esac
+    done <<<"$names"
+}
+
 # $1 (optional) overrides the layout mode ("full" or "narrow") instead
 # of measuring the real terminal via tui_layout_mode - lets tests force
 # the narrow path deterministically, since a non-interactive test
@@ -275,8 +301,7 @@ tui_render_overview() {
         [[ "$error_count" =~ ^[0-9]+$ && "$error_count" -gt 0 ]] && \
             add_alert alerts WARN logs "${error_count} error-level journal entries in the last 24h"
     fi
-    # TASK-3-INSERTION-POINT: Task 3 adds "tui_gather_module_alerts alerts"
-    # here, after the above and before the panels render below.
+    tui_gather_module_alerts alerts
 
     # --- render the panels. resources_content/services_content are
     # built as inline command substitutions (not named functions) since
