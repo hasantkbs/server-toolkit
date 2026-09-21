@@ -59,6 +59,8 @@ TUI_MIN_FULL_WIDTH=70
 
 # True (exit 0) iff color output should be used: NO_COLOR unset, stdout
 # is a real terminal, and that terminal reports at least 8 colors.
+# Not yet called by any render path in this release - color output is
+# reserved for a future sprint, see docs/tui.md's Colors section.
 tui_color_enabled() {
     [[ -n "${NO_COLOR:-}" ]] && return 1
     [[ -t 1 ]] || return 1
@@ -135,7 +137,7 @@ Refresh interval: $(config_get TUI_REFRESH_INTERVAL 5 positive_integer)s (TUI_RE
 Config file:      $(config_path)
 Custom modules:   $(modules_enabled && echo enabled || echo disabled)
 
-Press any key to return.
+Press h, H, or ? to return.
 EOF
 }
 

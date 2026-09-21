@@ -3,8 +3,8 @@
     server-toolkit tui
 
 A live-refreshing, keyboard-driven dashboard showing the same data
-`info` shows, in a bordered, continuously-updating view. Pure Bash, no
-extra dependency beyond what `info` and the other commands already use
+`info` shows, in a continuously-updating view. Pure Bash, no extra
+dependency beyond what `info` and the other commands already use
 (`tput`, `stty`, coreutils) - nothing new to install.
 
 ## Requirements
@@ -44,8 +44,8 @@ A terminal resize takes effect on the next refresh or keypress (up to
 `TUI_REFRESH_INTERVAL` seconds later), not instantly - the dashboard
 re-measures the terminal size on every render rather than reacting to
 the resize signal directly, a deliberate simplicity/robustness tradeoff.
-Below 70 columns, the dashboard switches to a single-column, unboxed
-listing instead of the two-column layout.
+Below 70 columns, the dashboard switches to a single-column listing
+instead of the two-column layout.
 
 ## Configuration
 
@@ -73,11 +73,12 @@ never runs with fewer protections than it already has outside the TUI.
 
 ## Colors
 
-Colors are used only to reinforce information already conveyed by text
-and the existing ✓/⚠/✗ status glyphs, never as the only signal. Set
-`NO_COLOR` (any non-empty value) to disable color entirely; color is
-also automatically disabled when output isn't a real color-capable
-terminal.
+This release renders in plain text - no ANSI color is emitted. The
+color-capability/`NO_COLOR` detection logic exists in `bin/tui`
+(matching the discipline used elsewhere in this project: color would
+only ever reinforce information already conveyed by text and the
+existing ✓/⚠/✗ status glyphs, never be the only signal) but isn't yet
+wired into any render call, so it has no visible effect today.
 
 ## Non-interactive/testing mode
 
