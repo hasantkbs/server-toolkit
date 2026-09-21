@@ -7,7 +7,7 @@ Bash tabanlı, read-only sunucu tanılama araç seti.
 Kullanıcı bir terminal oturumunda **"terminal"** dediğinde, bu projeden
 (`/home/<user>/server-toolkit`) kaldığımız yerden devam edilecek.
 
-## Durum (Sprint 13 sonu)
+## Durum (Sprint 14 sonu)
 
 - Sprint 1: `info` + `gpu-info`
 - Sprint 2: `docker-info`
@@ -22,6 +22,7 @@ Kullanıcı bir terminal oturumunda **"terminal"** dediğinde, bu projeden
 - Sprint 11: configuration engine (`lib/config.sh`, opsiyonel `~/.config/server-toolkit/config` — bkz. `docs/config.md`), `info`'nin RAM_ALERT_PCT eşiği bu engine'e bağlandı.
 - Sprint 12: custom module system (`lib/modules.sh`, opsiyonel `~/.config/server-toolkit/modules/` — bkz. `docs/modules.md`), `info`'ye `CUSTOM_MODULES_ENABLED` ile aç/kapa özel modül desteği eklendi.
 - Sprint 13: CLI dispatcher (`bin/server-toolkit` — `server-toolkit info`, `gpu`, `docker`, ... ve `modules`/`config`/`version`/`help` — bkz. `docs/cli.md`), eski bağımsız komutlar (`info`, `gpu-info`, ...) değişmeden çalışmaya devam ediyor.
+- Sprint 14: terminal dashboard (`bin/server-toolkit tui` / `bin/tui` — canlı yenilenen, klavye kontrollü panel; TUI_ONCE=1 ile non-interactive render — bkz. `docs/tui.md`), aynı diagnostic core'u (`lib/*.sh`, `lib/status.sh`, `lib/modules.sh`) yeniden kullanıyor, hiçbir tanılama mantığı tekrar yazılmadı.
 
 406/407 test PASS. Tüm komutlar read-only, destructive command yok,
 server-specific hardcoding yok. Bilinen 1 hata: "info v2 mocked scenarios"
@@ -41,10 +42,10 @@ gerekirse bu testin mock kapsamını genişletmek ayrı bir iş.
 - `docs/config.md`: opsiyonel configuration engine'in format/kullanım referansı.
 - `docs/modules.md`: opsiyonel custom module sisteminin format/güvenlik referansı.
 - `docs/cli.md`: `bin/server-toolkit` dispatcher'ının komut/güvenlik referansı.
+- `docs/tui.md`: terminal dashboard'ının kontrol/güvenlik referansı.
 
 ## Henüz yapılmadı
 
-- TUI
 - Plugin sistemi
 - Proje adı değişikliği / GitHub dosyaları
 
