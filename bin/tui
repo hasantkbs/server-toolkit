@@ -184,6 +184,7 @@ tui_content_gpu() {
     local gpu_list
     if gpu_list="$(get_gpu_list)" && [[ -n "$gpu_list" ]]; then
         local idx name driver util mem_used mem_total temp power_draw power_limit
+        # shellcheck disable=SC2034 # idx/driver/mem_used/mem_total/temp/power_draw/power_limit unused in this summary view
         IFS=',' read -r idx name driver util mem_used mem_total temp power_draw power_limit <<<"$(head -n1 <<<"$gpu_list")"
         name="$(gpu_trim "$name")"
         util="$(gpu_clean_field "$util")"
@@ -233,6 +234,7 @@ tui_gather_module_alerts() {
     local name status message output
     while IFS= read -r name; do
         [[ -z "$name" ]] && continue
+        # shellcheck disable=SC2034 # output unused - the compact ALERTS line only shows status/message
         IFS=$'\t' read -r status message output <<<"$(run_module "$name")"
         case "$status" in
             "$STATUS_WARN") add_alert _tui_module_alerts WARN "module:${name}" "$message" ;;
@@ -274,6 +276,7 @@ tui_render_overview() {
         [[ -n "$failed_units" ]] && failed_count="$(wc -l <<<"$failed_units" | tr -d '[:space:]')"
     fi
 
+    # shellcheck disable=SC2034 # populated via add_alert (nameref) and read via render_alerts
     local alerts=()
     local disk_num ram_num swap_num
     disk_num="$(tui_strip_pct "$disk_pct")"
@@ -378,6 +381,7 @@ TUI_SHOWING_HELP=0
 tui_cleanup() {
     tput cnorm 2>/dev/null || true
     tput rmcup 2>/dev/null || true
+    # shellcheck disable=SC2015 # the `|| true` is not an else-branch: it just forces this line's exit status to 0 either way
     [[ -n "$TUI_ORIG_STTY" ]] && stty "$TUI_ORIG_STTY" 2>/dev/null || true
 }
 
@@ -423,7 +427,7 @@ tui_main() {
     while true; do
         tui_render_frame
         key=""
-        read -t "$interval" -n 1 -s key || true
+        read -r -t "$interval" -n 1 -s key || true
         action="$(tui_key_action "$key")"
         case "$action" in
             quit) break ;;
