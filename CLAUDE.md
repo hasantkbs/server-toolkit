@@ -24,13 +24,13 @@ Kullanıcı bir terminal oturumunda **"terminal"** dediğinde, bu projeden
 - Sprint 13: CLI dispatcher (`bin/server-toolkit` — `server-toolkit info`, `gpu`, `docker`, ... ve `modules`/`config`/`version`/`help` — bkz. `docs/cli.md`), eski bağımsız komutlar (`info`, `gpu-info`, ...) değişmeden çalışmaya devam ediyor.
 - Sprint 14: terminal dashboard (`bin/server-toolkit tui` / `bin/tui` — canlı yenilenen, klavye kontrollü panel; TUI_ONCE=1 ile non-interactive render — bkz. `docs/tui.md`), aynı diagnostic core'u (`lib/*.sh`, `lib/status.sh`, `lib/modules.sh`) yeniden kullanıyor, hiçbir tanılama mantığı tekrar yazılmadı.
 
-406/407 test PASS. Tüm komutlar read-only, destructive command yok,
-server-specific hardcoding yok. Bilinen 1 hata: "info v2 mocked scenarios"
-bölümündeki "healthy mocked system" testi, gerçek host swap kullanımı
-%10 eşiğini geçtiğinde başarısız olur (bu test RAM/swap/disk'i mock'lamıyor,
-gerçek `/proc` verisini okuyor) — Sprint 13'ten bağımsız, önceden var olan
-bir ortam bağımlılığı, kod hatası değil. `free -m` ile swap kontrol edip
-gerekirse bu testin mock kapsamını genişletmek ayrı bir iş.
+453/453 test PASS. Tüm komutlar read-only, destructive command yok,
+server-specific hardcoding yok. Sprint 14'ün final review'unda,
+önceden bilinen "healthy mocked system" swap-flake'i (gerçek host
+swap state'ine bağımlıydı) kalıcı olarak düzeltildi — `info v2 mocked
+scenarios` bloğuna `free`/`df` mock'ları eklenerek RAM/swap/disk artık
+tamamen deterministik; test artık hiçbir gerçek sunucu durumuna bağlı
+değil. Bilinen hata kalmadı.
 
 ## Mimari
 
