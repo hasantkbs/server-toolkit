@@ -2407,7 +2407,27 @@ else
 fi
 exit 0
 MOCKEOF
-chmod +x "${MOCK_DIR}/systemctl" "${MOCK_DIR}/ps" "${MOCK_DIR}/journalctl" "${MOCK_DIR}/docker" "${MOCK_DIR}/ufw"
+cat >"${MOCK_DIR}/free" <<'MOCKEOF'
+#!/usr/bin/env bash
+# Deterministic `free -b` for every scenario in this block - fixed RAM/swap
+# values well under every alert threshold (RAM_ALERT_PCT default 90,
+# SWAP_ALERT_PCT 10), so none of these tests depend on, or are broken by,
+# the real host's actual memory/swap state. No scenario here asserts
+# anything about the RAM/SWAP sections, so one fixed healthy reading is
+# safe to share across all of them.
+printf '              total        used        free      shared  buff/cache   available\n'
+printf 'Mem:    17179869184  2147483648 13000000000   100000000   2000000000 14500000000\n'
+printf 'Swap:    4294967296           0  4294967296\n'
+MOCKEOF
+cat >"${MOCK_DIR}/df" <<'MOCKEOF'
+#!/usr/bin/env bash
+# Deterministic `df` for every scenario in this block - fixed disk usage
+# well under DISK_ALERT_PCT (80), so these tests never depend on, or are
+# broken by, the real host's actual disk usage.
+printf '     1B-blocks         Used Use%%\n'
+printf ' 500000000000  50000000000  10%%\n'
+MOCKEOF
+chmod +x "${MOCK_DIR}/systemctl" "${MOCK_DIR}/ps" "${MOCK_DIR}/journalctl" "${MOCK_DIR}/docker" "${MOCK_DIR}/ufw" "${MOCK_DIR}/free" "${MOCK_DIR}/df"
 MOCK_PATH="${MOCK_DIR}:${PATH}"
 
 if INFO_MOCK_SCENARIO=healthy PATH="$MOCK_PATH" "${BIN_DIR}/info" >/tmp/toolkit_test_infov2_healthy.out 2>/tmp/toolkit_test_infov2_healthy.err; then
