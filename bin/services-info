@@ -6,6 +6,19 @@
 # stops, restarts, reloads, enables, disables, or masks a unit.
 set -euo pipefail
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    cat <<'EOF'
+services-info - systemd service diagnostics dashboard (part of server-toolkit)
+
+USAGE:
+  services-info
+  server-toolkit services
+
+Read-only. Takes no arguments other than --help/-h.
+EOF
+    exit 0
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
 

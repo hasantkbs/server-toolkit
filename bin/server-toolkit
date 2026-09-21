@@ -37,6 +37,7 @@ COMMANDS:
   process    Process diagnostics
   logs       Journal/log diagnostics
   backup     Backup discovery
+  tui        Terminal dashboard (interactive)
   modules    Custom modules
   config     Configuration
   version    Show version
@@ -45,6 +46,8 @@ COMMANDS:
 Each command behaves identically to its standalone counterpart (info,
 gpu-info, docker-info, ...) - this dispatcher is a thin layer over them,
 not a replacement. Those standalone commands keep working directly too.
+
+Run 'server-toolkit <command> --help' (or -h) for a command's own usage.
 EOF
 }
 
@@ -58,6 +61,13 @@ print_version() {
 # by design) and NEVER calls run_module - this command must never run a
 # module's COMMAND, preserving Sprint 12's exact execution trust model.
 cmd_modules() {
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        printf 'server-toolkit modules - lists discovered custom modules and their status\n\n'
+        printf 'USAGE:\n'
+        printf '  server-toolkit modules\n\n'
+        printf 'Read-only introspection only - never runs a module. See docs/modules.md.\n'
+        return 0
+    fi
     if ! modules_enabled; then
         printf 'Custom modules are disabled (CUSTOM_MODULES_ENABLED=false).\n'
         printf 'Enable them by adding CUSTOM_MODULES_ENABLED=true to the main config file.\n'
@@ -98,6 +108,14 @@ cmd_modules() {
 cmd_config() {
     local sub="${1:-show}"
     case "$sub" in
+        --help|-h)
+            printf 'server-toolkit config - read-only configuration helper\n\n'
+            printf 'USAGE:\n'
+            printf '  server-toolkit config [path|show]\n\n'
+            printf '  path   Print the resolved config file path\n'
+            printf '  show   Print the config file'"'"'s content (default)\n\n'
+            printf 'Read-only - there is no config-editing subcommand. See docs/config.md.\n'
+            ;;
         path)
             config_path
             printf '\n'
@@ -147,7 +165,7 @@ case "$cmd" in
         source "${LIB_DIR}/config.sh"
         # shellcheck source=../lib/modules.sh
         source "${LIB_DIR}/modules.sh"
-        cmd_modules
+        cmd_modules "$@"
         exit $?
         ;;
     config)

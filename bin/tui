@@ -443,5 +443,19 @@ tui_main() {
 # when it's sourced (e.g. by tests, to call the pure functions above in
 # isolation without triggering the loop or the TTY check).
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        cat <<'EOF'
+tui - interactive terminal dashboard for server-toolkit
+
+USAGE:
+  tui
+  server-toolkit tui
+
+Requires a real interactive terminal (TTY) - refuses to start otherwise,
+with a clear message. See docs/tui.md for keyboard controls and details.
+Read-only. Takes no arguments other than --help/-h.
+EOF
+        exit 0
+    fi
     tui_main
 fi

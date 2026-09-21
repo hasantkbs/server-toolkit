@@ -12,6 +12,19 @@
 # (/var/backups) and keyword-based discovery (backup/snapshot/dump).
 set -euo pipefail
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    cat <<'EOF'
+backup-info - generic, read-only backup discovery/status dashboard (part of server-toolkit)
+
+USAGE:
+  backup-info
+  server-toolkit backup
+
+Read-only. Takes no arguments other than --help/-h.
+EOF
+    exit 0
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
 

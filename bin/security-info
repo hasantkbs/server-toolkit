@@ -7,6 +7,19 @@
 # jail, service state, or file permission.
 set -euo pipefail
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    cat <<'EOF'
+security-info - security posture dashboard (part of server-toolkit)
+
+USAGE:
+  security-info
+  server-toolkit security
+
+Read-only. Takes no arguments other than --help/-h.
+EOF
+    exit 0
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
 

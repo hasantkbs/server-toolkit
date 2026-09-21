@@ -12,6 +12,19 @@
 # never calls them.
 set -euo pipefail
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    cat <<'EOF'
+info - fast "at-a-glance" server dashboard (part of server-toolkit)
+
+USAGE:
+  info
+  server-toolkit info
+
+Read-only. Takes no arguments other than --help/-h.
+EOF
+    exit 0
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
 

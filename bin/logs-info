@@ -8,6 +8,19 @@
 # message text is data only - printed, never evaluated or executed.
 set -euo pipefail
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    cat <<'EOF'
+logs-info - bounded recent-log health summary (part of server-toolkit)
+
+USAGE:
+  logs-info
+  server-toolkit logs
+
+Read-only. Takes no arguments other than --help/-h.
+EOF
+    exit 0
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 LIB_DIR="$(cd -- "${SCRIPT_DIR}/../lib" >/dev/null 2>&1 && pwd -P)"
 

@@ -4100,6 +4100,68 @@ rc=$?
 
 rm -rf "$CLI_TMP2"
 
+echo "== cli: server-toolkit <command> --help / -h works consistently for every command =="
+declare -A CLI_HELP_MARKER=(
+    [info]="info - fast"
+    [gpu]="gpu-info -"
+    [docker]="docker-info -"
+    [network]="network-info -"
+    [storage]="storage-info -"
+    [services]="services-info -"
+    [security]="security-info -"
+    [process]="process-info -"
+    [logs]="logs-info -"
+    [backup]="backup-info -"
+    [tui]="tui - interactive"
+    [modules]="server-toolkit modules -"
+    [config]="server-toolkit config -"
+)
+for cli_cmd in "${!CLI_HELP_MARKER[@]}"; do
+    marker="${CLI_HELP_MARKER[$cli_cmd]}"
+    for flag in --help -h; do
+        if help_out="$("${BIN_DIR}/server-toolkit" "$cli_cmd" "$flag" 2>&1)"; then
+            if grep -qF "$marker" <<<"$help_out" && grep -q '^USAGE:' <<<"$help_out"; then
+                ok "server-toolkit $cli_cmd $flag prints usage and exits 0"
+            else
+                bad "server-toolkit $cli_cmd $flag did not print the expected usage text: $help_out"
+            fi
+        else
+            bad "server-toolkit $cli_cmd $flag exited non-zero"
+        fi
+    done
+done
+
+echo "== cli: --help never runs the underlying diagnostic (no real system data gathered) =="
+for cli_cmd in info gpu docker network storage services security process logs backup; do
+    header="${CLI_EXPECTED_HEADERS[$cli_cmd]}"
+    help_out="$("${BIN_DIR}/server-toolkit" "$cli_cmd" --help 2>&1)"
+    if ! grep -qF "$header" <<<"$help_out"; then
+        ok "server-toolkit $cli_cmd --help does not show the real '$header' diagnostic section"
+    else
+        bad "server-toolkit $cli_cmd --help unexpectedly ran the real diagnostic (found '$header')"
+    fi
+done
+
+echo "== cli: standalone commands (not just the dispatcher) support --help/-h directly =="
+for cli_bin in info gpu-info docker-info network-info storage-info services-info security-info process-info logs-info backup-info tui; do
+    if help_out="$("${BIN_DIR}/${cli_bin}" --help 2>&1)"; then
+        grep -q '^USAGE:' <<<"$help_out" && ok "${cli_bin} --help works when run directly, not only through the dispatcher" \
+            || bad "${cli_bin} --help ran but did not print the expected usage text: $help_out"
+    else
+        bad "${cli_bin} --help exited non-zero when run directly"
+    fi
+done
+
+echo "== cli: --help output is static text, never derived from or executing its own arguments =="
+rm -f /tmp/cli-help-pwned
+"${BIN_DIR}/server-toolkit" info '--help; touch /tmp/cli-help-pwned' >/tmp/toolkit_test_cli_help_inject.out 2>/tmp/toolkit_test_cli_help_inject.err
+if [[ ! -e /tmp/cli-help-pwned ]]; then
+    ok "a shell-metacharacter payload disguised as a --help-like argument is never executed"
+else
+    bad "SECURITY: a payload passed alongside --help was executed"
+fi
+rm -f /tmp/cli-help-pwned
+
 echo "== tui: command exists and is wired into the dispatcher =="
 if [[ -x "${BIN_DIR}/tui" ]]; then
     ok "bin/tui exists and is executable"
