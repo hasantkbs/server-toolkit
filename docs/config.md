@@ -38,13 +38,13 @@ text - it is never run.
 | Key | Type | Default | Used by |
 |---|---|---|---|
 | `RAM_ALERT_PCT` | percentage (0-100) | 90 | `info` |
-| `CUSTOM_MODULES_ENABLED` | boolean | false | `info` (custom modules - see `docs/modules.md`) |
-| `CUSTOM_MODULE_TIMEOUT_DEFAULT` | positive_integer | 5 | `info` (custom modules - see `docs/modules.md`) |
+| `CUSTOM_MODULES_ENABLED` | boolean | false | `info`, `tui` (custom modules - see `docs/modules.md`) |
+| `CUSTOM_MODULE_TIMEOUT_DEFAULT` | positive_integer | 5 | `info`, `tui` (custom modules - see `docs/modules.md`) |
+| `TUI_REFRESH_INTERVAL` | positive_integer | 5 | `tui` (see `docs/tui.md`) |
 
-More settings (dashboard sections, refresh interval, top-N process
-count, log lookback, etc.) will be wired up in future sprints - this
-table only lists what's actually connected today, not a preview of
-unimplemented options.
+More settings (dashboard sections, top-N process count, log lookback,
+etc.) will be wired up in future sprints - this table only lists what's
+actually connected today, not a preview of unimplemented options.
 
 ## Versioning
 
