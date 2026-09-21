@@ -171,7 +171,9 @@ tui_content_docker() {
         printf 'DOCKER\n'
         printf '  %-10s %s\n' "Containers" "$total"
         printf '  %-10s %s\n' "Running" "$running"
-        [[ -n "$healthy" ]] && printf '  %-10s %s\n' "Healthy" "$healthy"
+        if [[ -n "$healthy" ]]; then
+            printf '  %-10s %s\n' "Healthy" "$healthy"
+        fi
     else
         printf 'DOCKER\n  unavailable\n'
     fi
@@ -235,13 +237,14 @@ tui_render_overview() {
     read -r swap_used swap_total swap_pct <<<"$(get_swap_stats)"
     read -r disk_used disk_total disk_pct <<<"$(get_disk_stats)"
 
-    local running_count="N/A" failed_count=0
+    local running_count="N/A" failed_count="N/A"
     if systemd_available; then
         local all_units failed_units
         all_units="$(get_all_service_units)" || all_units=""
         running_count=0
         [[ -n "$all_units" ]] && running_count="$(awk -F'|' '$3=="active"' <<<"$all_units" | wc -l | tr -d '[:space:]')"
         failed_units="$(get_failed_service_units)" || failed_units=""
+        failed_count=0
         [[ -n "$failed_units" ]] && failed_count="$(wc -l <<<"$failed_units" | tr -d '[:space:]')"
     fi
 
@@ -259,6 +262,7 @@ tui_render_overview() {
     if [[ "$failed_count" =~ ^[0-9]+$ ]] && [[ "$failed_count" -gt 0 ]]; then
         add_alert alerts WARN services "${failed_count} failed systemd service(s)"
     fi
+    local snapshot
     if snapshot="$(get_process_snapshot)" && [[ -n "$snapshot" ]]; then
         local high_cpu_count
         high_cpu_count="$(count_above_threshold "$snapshot" 4 "$TUI_CPU_ALERT_THRESHOLD")"

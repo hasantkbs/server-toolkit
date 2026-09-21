@@ -4406,6 +4406,36 @@ else
     bad "tui TUI_ONCE runtime (${tui_ms}ms) diverges significantly from bin/info's runtime (${info_ms}ms), diff ${diff_ms}ms"
 fi
 
+echo "== tui: overview renders the full frame when docker containers report no health data (regression) =="
+# get_docker_healthy_count (lib/system.sh) prints an empty string when no
+# container reports health info - a real, common state (e.g. zero
+# containers, or containers with no HEALTHCHECK). tui_content_docker's
+# output is captured via $(...) under set -euo pipefail, so if its last
+# statement is a bare `[[ -n "$healthy" ]] && printf ...` that fails
+# (healthy empty), the whole function returns non-zero and kills the
+# entire render, silently truncating the dashboard before DOCKER/GPU/
+# NETWORK/SECURITY/ALERTS ever print. Reproduce with a minimal docker
+# stub that reports containers present but no health status.
+TUI_MOCK_DOCKER_DIR="$(mktemp -d)"
+cat >"${TUI_MOCK_DOCKER_DIR}/docker" <<'MOCKEOF'
+#!/usr/bin/env bash
+case "$1" in
+    version) printf '0.0.0-mock\n' ;;
+    info) [[ "${2:-}" == "--format" ]] && printf '{"ContainersRunning":0,"Containers":0}\n' ;;
+    ps) [[ "${2:-}" == "--format" ]] && exit 0 ;;
+esac
+exit 0
+MOCKEOF
+chmod +x "${TUI_MOCK_DOCKER_DIR}/docker"
+result="$(PATH="${TUI_MOCK_DOCKER_DIR}:${PATH}" TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null)"
+rc=$?
+rm -rf "${TUI_MOCK_DOCKER_DIR}"
+if [[ "$rc" -eq 0 ]] && grep -q 'Containers' <<<"$result" && grep -q '^ALERTS$' <<<"$result"; then
+    ok "tui overview completes the full frame (DOCKER through ALERTS) when docker reports no container health data"
+else
+    bad "tui overview truncated or failed (rc=$rc) when docker reported no container health data: $result"
+fi
+
 echo
 echo "Results: ${pass} passed, ${fail} failed"
 [[ "$fail" -eq 0 ]]
