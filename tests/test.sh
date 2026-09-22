@@ -4596,19 +4596,24 @@ else
     bad "tui help screen unexpectedly suggests an editing affordance: $result"
 fi
 
-echo "== docs: docs/cli.md mentions every command the live --help output reports =="
+echo "== docs: docs/cli.md's Commands table has its own row for every command the live --help output reports =="
 help_full="$("${BIN_DIR}/server-toolkit" --help 2>&1)"
 mapfile -t DOC_LIVE_COMMANDS < <(awk '/^COMMANDS:/{flag=1; next} /^$/{flag=0} flag{print $1}' <<<"$help_full")
 DOC_CLI_MISSING=()
 for doc_cmd in "${DOC_LIVE_COMMANDS[@]}"; do
-    if ! grep -qF "$doc_cmd" "${TOOLKIT_DIR}/docs/cli.md"; then
+    # Anchored to the start of a table row ("| `<cmd>` | ..."), not a bare
+    # substring search - a command name that only appears in prose
+    # elsewhere on the page (e.g. the "Command-specific help" section)
+    # must not count as documented in the Commands table itself.
+    doc_row_pattern='^\|[[:space:]]*`'"${doc_cmd}"'`'
+    if ! grep -qE "$doc_row_pattern" "${TOOLKIT_DIR}/docs/cli.md"; then
         DOC_CLI_MISSING+=("$doc_cmd")
     fi
 done
 if [[ "${#DOC_LIVE_COMMANDS[@]}" -gt 0 ]] && [[ "${#DOC_CLI_MISSING[@]}" -eq 0 ]]; then
-    ok "docs/cli.md mentions all ${#DOC_LIVE_COMMANDS[@]} commands from the live --help output (${DOC_LIVE_COMMANDS[*]})"
+    ok "docs/cli.md's Commands table has its own row for all ${#DOC_LIVE_COMMANDS[@]} commands from the live --help output (${DOC_LIVE_COMMANDS[*]})"
 else
-    bad "docs/cli.md is missing documentation for: ${DOC_CLI_MISSING[*]:-<none found - COMMANDS parsing failed>}"
+    bad "docs/cli.md's Commands table is missing a row for: ${DOC_CLI_MISSING[*]:-<none found - COMMANDS parsing failed>}"
 fi
 
 echo "== privacy: public documentation (README.md, top-level docs/*.md) contains no real infra identifiers =="

@@ -72,22 +72,31 @@ installer tells you if it isn't):
 
     server-toolkit info
 
-produces a fast, single-shot dashboard, roughly shaped like this
-(synthetic example output):
+produces a fast, single-shot dashboard, grouped into sections (`SERVER`,
+`SYSTEM`, and - depending on what's actually present on the host -
+`GPU`, `NETWORK`, `DOCKER`, `SERVICES`, `SECURITY`, `ALERTS`), each a
+plain `key   value` list under a header. It looks roughly like this
+(illustrative example with synthetic values - the exact sections and
+values on your host will differ):
 
     SERVER
-    Host:      example-host
-    Uptime:    4 days, 2 hours
-    OS:        Linux 6.8.0
+    ────────────────────────────────────────────────────────────
+    hostname            example-host
+    OS                  Ubuntu 24.04 LTS
+    kernel              6.8.0-generic
+    uptime              4d 19h 22m
+    load                0.70, 0.62, 0.61
 
     SYSTEM
-    CPU:       12% (OK)
-    RAM:       61% (OK)
-    Swap:      0% (OK)
-    Disk /:    47% (OK)
+    ────────────────────────────────────────────────────────────
+    CPU                 Example CPU Model (8c/16t)
+    RAM                 5GiB / 15GiB (35%)
+    SWAP                1GiB / 3GiB (32%)
+    DISK                134GiB / 499GiB (29%)
 
     ALERTS
-    (none)
+    ────────────────────────────────────────────────────────────
+    ⚠ Swap usage is 32% (example)
 
 For a live, continuously-updating view of the same kind of data instead
 of a single snapshot, use the interactive dashboard:
@@ -195,9 +204,14 @@ threshold, a process exit code, ...), not a subjective "health score."
   standalone commands under shorter names; it does not duplicate their
   logic.
 - `bin/tui` - the interactive layer, built on the exact same `lib/*.sh`
-  functions as `info` and the rest. No diagnostic logic is ever
-  duplicated between the dispatcher, the TUI, and the standalone
-  commands - there is exactly one implementation of each check.
+  data-gathering functions and the shared `lib/status.sh` alert contract
+  as `info` and the rest, so the dispatcher/TUI/standalone commands
+  reuse the same underlying checks rather than each reimplementing how
+  data is gathered. This isn't total: a handful of presentation-specific
+  values - `bin/tui`'s own alert thresholds (disk/swap/CPU percentages,
+  log lookback window) - are intentionally duplicated rather than
+  shared, by design, and are kept in sync with `bin/info` by hand (see
+  `bin/tui`'s own comment above those constants).
 
 ## Privacy
 
