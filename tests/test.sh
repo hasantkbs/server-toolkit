@@ -4596,6 +4596,58 @@ else
     bad "tui help screen unexpectedly suggests an editing affordance: $result"
 fi
 
+echo "== docs: docs/cli.md mentions every command the live --help output reports =="
+help_full="$("${BIN_DIR}/server-toolkit" --help 2>&1)"
+mapfile -t DOC_LIVE_COMMANDS < <(awk '/^COMMANDS:/{flag=1; next} /^$/{flag=0} flag{print $1}' <<<"$help_full")
+DOC_CLI_MISSING=()
+for doc_cmd in "${DOC_LIVE_COMMANDS[@]}"; do
+    if ! grep -qF "$doc_cmd" "${TOOLKIT_DIR}/docs/cli.md"; then
+        DOC_CLI_MISSING+=("$doc_cmd")
+    fi
+done
+if [[ "${#DOC_LIVE_COMMANDS[@]}" -gt 0 ]] && [[ "${#DOC_CLI_MISSING[@]}" -eq 0 ]]; then
+    ok "docs/cli.md mentions all ${#DOC_LIVE_COMMANDS[@]} commands from the live --help output (${DOC_LIVE_COMMANDS[*]})"
+else
+    bad "docs/cli.md is missing documentation for: ${DOC_CLI_MISSING[*]:-<none found - COMMANDS parsing failed>}"
+fi
+
+echo "== privacy: public documentation (README.md, top-level docs/*.md) contains no real infra identifiers =="
+PRIVACY_DOC_FILES=()
+[[ -f "${TOOLKIT_DIR}/README.md" ]] && PRIVACY_DOC_FILES+=("${TOOLKIT_DIR}/README.md")
+for privacy_f in "${TOOLKIT_DIR}"/docs/*.md; do
+    [[ -f "$privacy_f" ]] && PRIVACY_DOC_FILES+=("$privacy_f")
+done
+# docs/superpowers/ is deliberately excluded (internal sprint-planning
+# history, not public documentation) - the glob above is non-recursive
+# and never descends into it.
+
+PRIVACY_TOKEN_HITS="$(grep -nEi '<user>|<project-a>|<project-b>' "${PRIVACY_DOC_FILES[@]}" 2>/dev/null || true)"
+
+PRIVACY_IP_HITS=""
+while IFS= read -r privacy_line; do
+    [[ -z "$privacy_line" ]] && continue
+    privacy_file="${privacy_line%%:*}"
+    privacy_rest="${privacy_line#*:}"
+    privacy_lineno="${privacy_rest%%:*}"
+    privacy_ip="${privacy_rest#*:}"
+    # Allow-list: loopback/any, RFC1918 private ranges, and RFC5737
+    # documentation ranges - all legitimate in example documentation.
+    case "$privacy_ip" in
+        127.0.0.1|0.0.0.0) continue ;;
+        10.*) continue ;;
+        192.168.*) continue ;;
+        172.1[6-9].*|172.2[0-9].*|172.3[01].*) continue ;;
+        192.0.2.*|198.51.100.*|203.0.113.*) continue ;;
+    esac
+    PRIVACY_IP_HITS+="${privacy_file}:${privacy_lineno}: ${privacy_ip}"$'\n'
+done < <(grep -noE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' "${PRIVACY_DOC_FILES[@]}" 2>/dev/null)
+
+if [[ -z "$PRIVACY_TOKEN_HITS" ]] && [[ -z "$PRIVACY_IP_HITS" ]]; then
+    ok "no real hostname/internal-project-name token or non-example IPv4 literal in README.md/docs/*.md (${#PRIVACY_DOC_FILES[@]} files scanned)"
+else
+    bad "public documentation contains a possible real infra identifier - tokens: [${PRIVACY_TOKEN_HITS}] ips: [${PRIVACY_IP_HITS}]"
+fi
+
 echo
 echo "Results: ${pass} passed, ${fail} failed"
 [[ "$fail" -eq 0 ]]

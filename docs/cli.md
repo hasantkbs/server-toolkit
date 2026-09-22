@@ -26,6 +26,7 @@ Running with no command shows the `info` dashboard - the same as
 | `process` | `bin/process-info` | |
 | `logs` | `bin/logs-info` | |
 | `backup` | `bin/backup-info` | |
+| `tui` | `bin/tui` | Interactive terminal dashboard - see `docs/tui.md` |
 | `modules` | (built into the dispatcher) | Lists discovered custom modules and enabled/disabled status - see below |
 | `config` | (built into the dispatcher) | Shows config path/content - see below |
 | `version` / `--version` / `-V` | (built into the dispatcher) | Prints the version string |
@@ -36,6 +37,18 @@ error to stderr, points you at `help`, and exits with status 127 - never
 a raw Bash error. An unrecognized *argument* to a known command (e.g.
 `server-toolkit info extra`) is passed straight through to that command,
 which currently ignores any arguments - a harmless, deterministic no-op.
+
+## Command-specific help
+
+    server-toolkit <command> --help
+    server-toolkit <command> -h
+
+Every command listed above accepts `--help`/`-h` and prints that
+command's own usage text instead of running it - this never gathers any
+real system data, it's static text. This works identically whether you
+go through the dispatcher (`server-toolkit info --help`) or run the
+standalone command directly (`./bin/info --help`, `./bin/tui --help`,
+...) - both paths print the same usage text.
 
 ## `modules`
 

@@ -39,6 +39,13 @@ config file (`~/.config/server-toolkit/config`):
 Then each module also needs its own `ENABLED=true` (see below) — both
 switches must be on for a module to actually run.
 
+`server-toolkit tui` also discovers and runs your enabled custom
+modules, on every refresh, using this exact same two-gate trust model
+and the same timeout/output-capture mechanics described on this page —
+`info` and `tui` share one discovery/execution path, nothing is
+reimplemented for the TUI. See `docs/tui.md`'s "Custom modules" section
+for how that plays out across the TUI's refresh cycle specifically.
+
 ## Module file format
 
 One file per module, named `<name>.conf`, where `<name>` may only

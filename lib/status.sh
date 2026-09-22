@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # status.sh - minimal shared status/alert contract for dashboard-style
-# commands (used by `info`; available for a future TUI/config/plugin layer
-# to reuse without needing to change how individual modules print today).
+# commands. Used by `info` and `tui` (both render the same OK/WARN/ERROR/
+# UNKNOWN alerts through add_alert/render_alerts below); available for a
+# future plugin layer to reuse the same way without needing to change how
+# individual modules print today.
 #
 # Deliberately small: this is a data shape and two rendering helpers, not a
 # framework. It does not change how any existing bin/*-info command builds

@@ -5,7 +5,7 @@ Bash tabanlı, read-only sunucu tanılama araç seti.
 ## Devam etme talimatı
 
 Kullanıcı bir terminal oturumunda **"terminal"** dediğinde, bu projeden
-(`/home/<user>/server-toolkit`) kaldığımız yerden devam edilecek.
+(server-toolkit reposundan) kaldığımız yerden devam edilecek.
 
 ## Durum (Sprint 15 sonu)
 
@@ -25,7 +25,7 @@ Kullanıcı bir terminal oturumunda **"terminal"** dediğinde, bu projeden
 - Sprint 14: terminal dashboard (`bin/server-toolkit tui` / `bin/tui` — canlı yenilenen, klavye kontrollü panel; TUI_ONCE=1 ile non-interactive render — bkz. `docs/tui.md`), aynı diagnostic core'u (`lib/*.sh`, `lib/status.sh`, `lib/modules.sh`) yeniden kullanıyor, hiçbir tanılama mantığı tekrar yazılmadı.
 - Sprint 15: user-level install/update/uninstall sistemi (`install.sh` — repo kökünde; `bash install.sh install|update|uninstall` — bkz. `docs/install.md`). Whole-tree copy + fixed-path wrapper: `bin/+lib/+docs`, `${XDG_DATA_HOME:-~/.local/share}/server-toolkit-<version>/` içine kopyalanıyor, stabil bir symlink (`.../server-toolkit`) güncel versiyona işaret ediyor, `${TOOLKIT_BIN_DIR:-~/.local/bin}/server-toolkit` sabit-yollu bir wrapper. Update tek bir atomik `ln -sfn` ile versiyon değiştiriyor. Her silme işlemi `.server-toolkit-install` marker dosyasıyla doğrulanıyor. `~/.bashrc`/`~/.zshrc`/`~/.profile` sadece açıkça `--add-to-path` verilirse değişiyor. Config her zaman korunuyor, sadece `uninstall --purge-config` siliyor. Hiçbir `bin/*`/`lib/*.sh` dosyası değiştirilmedi — sadece kopyalanıyor.
 
-tests/test.sh: 501/501, tests/test-install.sh: 23/23 (yeni, izole
+tests/test.sh: 503/503, tests/test-install.sh: 31/31 (yeni, izole
 HOME/PATH testleri — bkz. `tests/test-install.sh`). Tüm komutlar
 read-only, destructive command yok, server-specific hardcoding yok.
 Bilinen hata kalmadı.
