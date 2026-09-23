@@ -7,9 +7,14 @@
 #
 # shellcheck disable=SC2034 # DOCKER_* globals below are consumed by bin/docker-info
 
-# True if the docker CLI exists and the daemon answers.
+# True if the docker CLI exists and the daemon answers. Time-bounded like
+# every other single-shot external-tool check in this codebase (see
+# lib/logs.sh's journalctl calls) - a wedged Docker daemon must never hang
+# a caller (bin/docker-info, bin/storage-info, bin/tui) indefinitely.
 docker_available() {
-    command_exists docker && docker info >/dev/null 2>&1
+    command_exists docker || return 1
+    command_exists timeout || return 1
+    timeout 3 docker info >/dev/null 2>&1
 }
 
 # Prints "running" or "unavailable".
@@ -22,16 +27,17 @@ get_docker_daemon_state() {
 }
 
 # Prints the Docker Compose plugin version (e.g. "v5.4.0"), or empty if the
-# plugin isn't installed.
+# plugin isn't installed. Time-bounded - see docker_available.
 get_compose_version() {
-    safe_run docker compose version --short || printf ''
+    command_exists timeout || { printf ''; return; }
+    safe_run timeout 3 docker compose version --short || printf ''
 }
 
 # Prints "images_total volumes_total" using docker system df, or "N/A N/A"
-# if the daemon is unreachable.
+# if the daemon is unreachable or the call times out.
 get_docker_disk_counts() {
     local df_json
-    if ! df_json="$(docker system df --format '{{json .}}' 2>/dev/null)"; then
+    if ! command_exists timeout || ! df_json="$(timeout 5 docker system df --format '{{json .}}' 2>/dev/null)"; then
         printf 'N/A N/A'
         return
     fi
@@ -41,46 +47,54 @@ get_docker_disk_counts() {
     printf '%s %s' "${images_total:-N/A}" "${volumes_total:-N/A}"
 }
 
-# One line per docker-system-df category: Type|Size|Reclaimable
+# One line per docker-system-df category: Type|Size|Reclaimable. Time-bounded
+# - see docker_available.
 get_docker_disk_usage_lines() {
+    command_exists timeout || return 1
     local df_json
-    df_json="$(docker system df --format '{{json .}}' 2>/dev/null)" || return 1
+    df_json="$(timeout 5 docker system df --format '{{json .}}' 2>/dev/null)" || return 1
     [[ -z "$df_json" ]] && return 1
     jq -r '[.Type, .Size, .Reclaimable] | join("|")' <<<"$df_json" 2>/dev/null
 }
 
-# Prints the total number of Docker networks (0 if none / unreachable).
+# Prints the total number of Docker networks (0 if none / unreachable /
+# timed out).
 get_docker_network_count() {
+    command_exists timeout || { printf '0'; return; }
     local out
-    out="$(docker network ls -q 2>/dev/null)" || { printf '0'; return; }
+    out="$(timeout 3 docker network ls -q 2>/dev/null)" || { printf '0'; return; }
     [[ -z "$out" ]] && { printf '0'; return; }
     wc -l <<<"$out" | tr -d '[:space:]'
 }
 
-# One line per network: Name|Driver|ContainerCount
+# One line per network: Name|Driver|ContainerCount. Time-bounded - see
+# docker_available.
 get_docker_network_lines() {
+    command_exists timeout || return 1
     local ids
-    ids="$(docker network ls -q 2>/dev/null)" || return 1
+    ids="$(timeout 3 docker network ls -q 2>/dev/null)" || return 1
     [[ -z "$ids" ]] && return 1
     # shellcheck disable=SC2086 # intentional word-splitting: network IDs, one arg each
-    docker network inspect $ids --format '{{.Name}}|{{.Driver}}|{{len .Containers}}' 2>/dev/null
+    timeout 5 docker network inspect $ids --format '{{.Name}}|{{.Driver}}|{{len .Containers}}' 2>/dev/null
 }
 
-# One line per volume: Name|Driver
+# One line per volume: Name|Driver. Time-bounded - see docker_available.
 get_docker_volume_lines() {
+    command_exists timeout || return 1
     local out
-    out="$(docker volume ls --format '{{.Name}}|{{.Driver}}' 2>/dev/null)" || return 1
+    out="$(timeout 3 docker volume ls --format '{{.Name}}|{{.Driver}}' 2>/dev/null)" || return 1
     [[ -z "$out" ]] && return 1
     printf '%s\n' "$out"
 }
 
 # The N largest images by size: one line per image, "Repository:Tag|Size",
 # largest first. Sizing comes straight from `docker images` (no filesystem
-# scanning).
+# scanning). Time-bounded - see docker_available.
 get_docker_largest_images() {
     local n="${1:-3}"
+    command_exists timeout || return 1
     local out
-    out="$(docker images --format '{{.Repository}}:{{.Tag}}|{{.Size}}' 2>/dev/null)" || return 1
+    out="$(timeout 5 docker images --format '{{.Repository}}:{{.Tag}}|{{.Size}}' 2>/dev/null)" || return 1
     [[ -z "$out" ]] && return 1
 
     while IFS='|' read -r repo size; do
@@ -149,8 +163,10 @@ collect_docker_containers() {
     DOCKER_TOTAL_CPU_PCT=""
     DOCKER_TOTAL_MEM_BYTES=""
 
+    command_exists timeout || return 1
+
     local ps_lines
-    ps_lines="$(docker ps -a --format '{{.Names}}|{{.Status}}' 2>/dev/null)" || return 1
+    ps_lines="$(timeout 5 docker ps -a --format '{{.Names}}|{{.Status}}' 2>/dev/null)" || return 1
     [[ -z "$ps_lines" ]] && return 1
 
     local name status
@@ -166,11 +182,11 @@ collect_docker_containers() {
     done <<<"$ps_lines"
 
     local ids
-    ids="$(docker ps -aq 2>/dev/null)"
+    ids="$(timeout 5 docker ps -aq 2>/dev/null)"
     if [[ -n "$ids" ]]; then
         local inspect_lines iname restarts health
         # shellcheck disable=SC2086 # intentional word-splitting: container IDs, one arg each
-        inspect_lines="$(docker inspect $ids \
+        inspect_lines="$(timeout 5 docker inspect $ids \
             --format '{{.Name}}|{{.RestartCount}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
             2>/dev/null)" || inspect_lines=""
         while IFS='|' read -r iname restarts health; do
@@ -182,7 +198,7 @@ collect_docker_containers() {
     fi
 
     local stats_lines
-    stats_lines="$(docker stats --no-stream --format '{{.Name}}	{{.CPUPerc}}	{{.MemUsage}}	{{.MemPerc}}' 2>/dev/null)" || stats_lines=""
+    stats_lines="$(timeout 5 docker stats --no-stream --format '{{.Name}}	{{.CPUPerc}}	{{.MemUsage}}	{{.MemPerc}}' 2>/dev/null)" || stats_lines=""
     if [[ -n "$stats_lines" ]]; then
         local sname cpu mem mempct
         while IFS=$'\t' read -r sname cpu mem mempct; do

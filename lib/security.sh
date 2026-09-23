@@ -15,11 +15,15 @@ ufw_installed() {
 }
 
 # Raw `ufw status verbose` output, or empty (return 1) if unavailable,
-# uninstalled, or inaccessible (e.g. permission denied as non-root).
+# uninstalled, inaccessible (e.g. permission denied as non-root), or the
+# call times out. Time-bounded like every other single-shot external-tool
+# check in this codebase (see lib/logs.sh's journalctl calls) - a wedged
+# ufw must never hang a caller (bin/security-info, bin/tui) indefinitely.
 get_ufw_status_raw() {
     ufw_installed || return 1
+    command_exists timeout || return 1
     local out rc=0
-    out="$(ufw status verbose 2>/dev/null)" || rc=$?
+    out="$(timeout 3 ufw status verbose 2>/dev/null)" || rc=$?
     [[ "$rc" -ne 0 ]] && return 1
     [[ -z "$out" ]] && return 1
     [[ "$out" == *"need to be root"* ]] && return 1

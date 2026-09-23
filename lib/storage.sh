@@ -82,22 +82,33 @@ get_dir_sizes_at_depth() {
     printf '%s\n' "$out"
 }
 
-# Files at or above min_size (e.g. "500M") under one directory: bytes<TAB>path
-# lines, largest first. Bounded depth, stays on one filesystem, never
-# follows symlinks, time-bounded. Prints nothing and returns 1 if the path
-# doesn't exist or nothing qualifies.
+# Files at or above min_size (e.g. "500M") under one directory: NUL-terminated
+# bytes<TAB>path records on stdout, largest first. Bounded depth, stays on
+# one filesystem, never follows symlinks, time-bounded. Prints nothing and
+# returns 1 if the path doesn't exist or nothing qualifies.
+#
+# NUL-terminated (not newline-terminated) deliberately: a filename can
+# legally contain an embedded newline (a path can never contain a NUL byte -
+# that's kernel-enforced), so newline-delimited records let a maliciously
+# named file forge a second, fully attacker-controlled "record" - including
+# its leading bytes field, which callers feed into arithmetic comparisons.
+# NUL delimiting makes that structurally impossible. Bash's `$(...)` command
+# substitution silently drops embedded NUL bytes, so this never captures via
+# a scalar variable - it reads through `mapfile -d ''` from a process
+# substitution instead, and callers must consume this function's stdout the
+# same way (`read -r -d ''` / `mapfile -d ''`), never `x="$(get_large_files_in ...)"`.
 get_large_files_in() {
     local dir="$1" min_size="${2:-500M}" timeout_secs="${3:-15}"
     [[ -d "$dir" ]] || return 1
     command_exists find || return 1
-    local out
+    local -a entries=()
     if command_exists timeout; then
-        out="$(timeout "$timeout_secs" find "$dir" -xdev -maxdepth 10 -type f -size "+${min_size}" -printf '%s\t%p\n' 2>/dev/null)" || true
+        mapfile -d '' -t entries < <(timeout "$timeout_secs" find "$dir" -xdev -maxdepth 10 -type f -size "+${min_size}" -printf '%s\t%p\0' 2>/dev/null)
     else
-        out="$(find "$dir" -xdev -maxdepth 10 -type f -size "+${min_size}" -printf '%s\t%p\n' 2>/dev/null)" || true
+        mapfile -d '' -t entries < <(find "$dir" -xdev -maxdepth 10 -type f -size "+${min_size}" -printf '%s\t%p\0' 2>/dev/null)
     fi
-    [[ -z "$out" ]] && return 1
-    sort -t $'\t' -k1,1 -rn <<<"$out"
+    [[ "${#entries[@]}" -eq 0 ]] && return 1
+    printf '%s\0' "${entries[@]}" | sort -z -t $'\t' -k1,1 -rn
 }
 
 # One line per whole-disk block device: device|read_bytes|write_bytes.

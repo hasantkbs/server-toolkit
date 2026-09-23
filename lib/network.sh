@@ -17,16 +17,20 @@ get_mac_address() {
 }
 
 # Prints the interface's global-scope IPv6 address if present, falling back
-# to any IPv6 address (e.g. link-local); empty if none / tools unavailable.
+# to any IPv6 address (e.g. link-local); empty if none / tools unavailable /
+# the call times out. Time-bounded like every other single-shot
+# external-tool check in this codebase (see lib/logs.sh's journalctl calls)
+# - a wedged `ip` must never hang a caller (bin/network-info, bin/tui)
+# indefinitely.
 get_ipv6_address() {
     local iface="$1"
     [[ -z "$iface" ]] && { printf ''; return; }
-    if ! command_exists ip || ! command_exists jq; then
+    if ! command_exists ip || ! command_exists jq || ! command_exists timeout; then
         printf ''
         return
     fi
     local addr_json
-    addr_json="$(ip -j -6 addr show dev "$iface" 2>/dev/null)" || { printf ''; return; }
+    addr_json="$(timeout 3 ip -j -6 addr show dev "$iface" 2>/dev/null)" || { printf ''; return; }
     local addr
     addr="$(jq -r '[.[0].addr_info[]? | select(.scope=="global")][0].local // empty' <<<"$addr_json" 2>/dev/null)"
     if [[ -z "$addr" ]]; then
@@ -41,8 +45,9 @@ get_ipv6_address() {
 get_physical_interface_lines() {
     command_exists ip || return 1
     command_exists jq || return 1
+    command_exists timeout || return 1
     local names
-    names="$(ip -j link show 2>/dev/null | jq -r '
+    names="$(timeout 3 ip -j link show 2>/dev/null | jq -r '
         .[] | select(.ifname != "lo")
             | select(.ifname != "docker0")
             | select(.ifname | startswith("br-") | not)
@@ -65,8 +70,9 @@ get_physical_interface_lines() {
 get_docker_link_lines() {
     command_exists ip || return 1
     command_exists jq || return 1
+    command_exists timeout || return 1
     local out
-    out="$(ip -j link show 2>/dev/null | jq -r '
+    out="$(timeout 3 ip -j link show 2>/dev/null | jq -r '
         .[] | select(.ifname == "docker0" or (.ifname | startswith("br-")))
             | [.ifname, .operstate] | join("|")
     ')" || return 1
@@ -128,8 +134,9 @@ check_internet() {
 # socket) rather than failing the whole command.
 get_listening_ports() {
     command_exists ss || return 1
+    command_exists timeout || return 1
     local raw
-    raw="$(ss -H -tlnp 2>/dev/null)" || return 1
+    raw="$(timeout 3 ss -H -tlnp 2>/dev/null)" || return 1
     [[ -z "$raw" ]] && return 1
 
     local line local_addr bind port proc_field proc_name category
@@ -161,8 +168,9 @@ get_listening_ports() {
 # occurrences are simply absent).
 get_connection_state_counts() {
     command_exists ss || return 1
+    command_exists timeout || return 1
     local raw
-    raw="$(ss -H -tan 2>/dev/null)" || return 1
+    raw="$(timeout 3 ss -H -tan 2>/dev/null)" || return 1
     [[ -z "$raw" ]] && return 1
     awk '{ print $1 }' <<<"$raw" | sort | uniq -c | awk '{ print $2"|"$1 }'
 }

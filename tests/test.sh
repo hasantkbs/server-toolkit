@@ -319,6 +319,107 @@ else
     bad "storage.sh / storage-info appear to contain a destructive command"
 fi
 
+echo "== embedded-newline/tab/unicode filenames are parsed correctly by get_large_files_in, not mangled =="
+# A regular filename (a single path component - it can never contain '/',
+# but it CAN legally contain embedded newlines/tabs/unicode) must survive
+# get_large_files_in's NUL-delimited parsing byte-exact: right real size,
+# right full path, unmangled - never truncated or rejected just because it
+# contains characters that used to be unsafe record delimiters.
+PARSE_DIR="$(mktemp -d)"
+PARSE_HELPER="$(mktemp)"
+cat >"$PARSE_HELPER" <<'HELPEREOF'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$1/common.sh"
+source "$1/storage.sh"
+dir="$2"
+weird_name="$3"
+found_weird=0
+found_plain=0
+while IFS= read -r -d '' entry; do
+    bytes="${entry%%$'\t'*}"
+    path="${entry#*$'\t'}"
+    if [[ "$path" == "${dir}/${weird_name}" && "$bytes" == "2097152" ]]; then
+        found_weird=1
+    fi
+    if [[ "$path" == "${dir}/plain-companion.bin" && "$bytes" == "3145728" ]]; then
+        found_plain=1
+    fi
+done < <(get_large_files_in "$dir" 1M)
+printf 'weird=%s plain=%s\n' "$found_weird" "$found_plain"
+HELPEREOF
+WEIRD_NAME=$'weird\nname\twith\ttabs and unicode caf\xc3\xa9.bin'
+truncate -s 2M -- "${PARSE_DIR}/${WEIRD_NAME}"
+truncate -s 3M -- "${PARSE_DIR}/plain-companion.bin"
+parse_result="$(bash "$PARSE_HELPER" "$LIB_DIR" "$PARSE_DIR" "$WEIRD_NAME")"
+if [[ "$parse_result" == "weird=1 plain=1" ]]; then
+    ok "get_large_files_in reports a newline/tab/unicode-named file and a plain companion file correctly, byte-exact, without mangling"
+else
+    bad "get_large_files_in did not correctly parse mixed-content filenames: '$parse_result'"
+fi
+rm -rf -- "$PARSE_DIR"
+rm -f -- "$PARSE_HELPER"
+
+echo "== SECURITY: an embedded-newline filename cannot forge an arithmetic-injection record in storage-info =="
+# find's -printf '%s\t%p\n' does not escape a newline embedded in a
+# filename, so a filename containing one can make the tab/newline stream
+# look like TWO records - the second one's "bytes" field fully
+# attacker-controlled. That forged field used to reach
+# `[[ "$bytes" -ge "$LARGE_FILE_ALERT_BYTES" ]]`, and bash's arithmetic
+# evaluator expands an array subscript's contents - including a command
+# substitution inside it - as a side effect of resolving the reference,
+# before it ever checks whether the overall result is numeric. The
+# subscripted name has to be an identifier bash already has some binding
+# for (this script's own `large_file_entries=()` array, still in scope at
+# that point, works; a name bash has never seen is instead an immediate
+# "unbound variable" under this script's own `set -u`, which blocks the
+# side effect before it runs). This reproduces the real mechanism
+# end-to-end against the real, unmodified bin/storage-info (not a mock,
+# not a source grep): a real crafted file is planted where storage-info's
+# fixed large-file scan (LARGE_FILE_SEARCH_DIRS includes /home) will find
+# it, and a real canary file is checked for afterward.
+#
+# Note on ranking: this technique only works when the payload starts with
+# a valid bash identifier character (a letter or underscore) - GNU sort's
+# numeric sort then reads that as a non-numeric (effectively zero) field,
+# so this forged record cannot be made to outrank whatever real large
+# files already exist under /home on the machine running this test, and
+# storage-info only prints its top LARGEST_FILES_COUNT (10) entries. On a
+# host with fewer than ~10 real 500MB+ files under /home this record
+# reaches the vulnerable comparison directly; on a host with more (like a
+# dev box full of ML model blobs), it may not appear in the printed top 10
+# at all. Either way this test still proves storage-info doesn't
+# crash/hang on a real crafted file and never produces an unexpected
+# canary. The deterministic, environment-independent mutation-test
+# evidence (this exact payload actually firing pre-fix, in an isolated
+# directory with no ranking competition) is in the remediation report, and
+# the companion "get_large_files_in ... byte-exact, without mangling"
+# test above is the environment-independent proof that record forgery is
+# now structurally impossible regardless of ranking.
+ST_RCE_CANARY_NAME="st_storage_rce_canary_marker_$$"
+ST_RCE_RUN_CWD="$(mktemp -d /tmp/st-storage-rce-cwd.XXXXXX)"
+ST_RCE_FIXTURE_DIR="$(mktemp -d "${HOME}/.st-storage-rce-test.XXXXXX")"
+ST_RCE_NAME="$(printf 'legit_large_file\nlarge_file_entries[$(touch %s)]\tzz' "$ST_RCE_CANARY_NAME")"
+truncate -s 600M -- "${ST_RCE_FIXTURE_DIR}/${ST_RCE_NAME}"
+truncate -s 550M -- "${ST_RCE_FIXTURE_DIR}/normal-large-companion-file.bin"
+
+( cd "$ST_RCE_RUN_CWD" && "${BIN_DIR}/storage-info" >/tmp/toolkit_test_storage_rce.out 2>/tmp/toolkit_test_storage_rce.err )
+rce_rc=$?
+
+if [[ "$rce_rc" -eq 0 ]]; then
+    ok "storage-info completes without crashing when a large-file scan directory contains a newline-crafted filename"
+else
+    bad "storage-info exited non-zero with a newline-crafted filename present: $(cat /tmp/toolkit_test_storage_rce.err)"
+fi
+
+if [[ ! -e "${ST_RCE_RUN_CWD}/${ST_RCE_CANARY_NAME}" ]]; then
+    ok "SECURITY: the embedded-newline filename's forged 'bytes' field did not reach bash arithmetic evaluation (no canary created)"
+else
+    bad "SECURITY: arithmetic-injection canary was created - a crafted filename executed a command via storage-info"
+fi
+
+rm -rf -- "$ST_RCE_FIXTURE_DIR" "$ST_RCE_RUN_CWD"
+
 echo "== services-info runs successfully (live systemd) =="
 if "${BIN_DIR}/services-info" >/tmp/toolkit_test_services.out 2>/tmp/toolkit_test_services.err; then
     ok "services-info exits 0"
@@ -4245,6 +4346,159 @@ if command -v script >/dev/null 2>&1; then
     rm -rf "$TUI_TMP3"
 else
     ok "script command not available - skipping SIGINT pty test (environment limitation, not a code issue)"
+fi
+
+# --- Regression tests: a wedged external tool must never hang a caller
+# (journalctl/du/find/module execution were already timeout-wrapped;
+# docker/systemctl/ufw/nvidia-smi/ss/ip were not). Each test below shadows
+# one of the now-wrapped commands with a script that sleeps far longer
+# than the new internal timeout, then asserts the real bin/* command still
+# completes within a bounded wall-clock time and degrades to the same
+# graceful N/A/unavailable reporting this codebase already uses elsewhere,
+# rather than hanging or crashing.
+
+echo "== SECURITY: a wedged 'docker' binary does not hang docker-info =="
+HANG_DIR="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/docker"
+chmod +x "${HANG_DIR}/docker"
+start_ts=$(date +%s)
+PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/docker-info" >/tmp/toolkit_test_docker_hang.out 2>/tmp/toolkit_test_docker_hang.err
+hang_rc=$?
+elapsed=$(( $(date +%s) - start_ts ))
+if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
+    ok "docker-info completes in ${elapsed}s despite a wedged 'docker' binary on PATH (bounded, not the full 60s hang)"
+else
+    bad "docker-info did not complete promptly with a wedged docker binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_docker_hang.err)"
+fi
+if grep -A2 '^DOCKER$' /tmp/toolkit_test_docker_hang.out | grep -qE 'Daemon +unavailable'; then
+    ok "docker-info degrades to 'Daemon unavailable' gracefully rather than hanging or crashing when docker is wedged"
+else
+    bad "docker-info did not gracefully report Daemon unavailable for a wedged docker: $(cat /tmp/toolkit_test_docker_hang.out)"
+fi
+rm -rf -- "$HANG_DIR"
+
+echo "== SECURITY: a wedged 'systemctl' binary does not hang services-info =="
+HANG_DIR="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/systemctl"
+chmod +x "${HANG_DIR}/systemctl"
+start_ts=$(date +%s)
+PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/services-info" >/tmp/toolkit_test_services_hang.out 2>/tmp/toolkit_test_services_hang.err
+hang_rc=$?
+elapsed=$(( $(date +%s) - start_ts ))
+if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
+    ok "services-info completes in ${elapsed}s despite a wedged 'systemctl' binary on PATH (bounded, not the full 60s hang)"
+else
+    bad "services-info did not complete promptly with a wedged systemctl binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_services_hang.err)"
+fi
+if grep -A2 '^SERVICES$' /tmp/toolkit_test_services_hang.out | grep -qE 'Systemd +N/A'; then
+    ok "services-info degrades to 'Systemd N/A' gracefully rather than hanging or crashing when systemctl is wedged"
+else
+    bad "services-info did not gracefully report Systemd N/A for a wedged systemctl: $(cat /tmp/toolkit_test_services_hang.out)"
+fi
+rm -rf -- "$HANG_DIR"
+
+echo "== SECURITY: a wedged 'ufw' binary does not hang security-info =="
+HANG_DIR="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/ufw"
+chmod +x "${HANG_DIR}/ufw"
+start_ts=$(date +%s)
+PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_hang.out 2>/tmp/toolkit_test_security_hang.err
+hang_rc=$?
+elapsed=$(( $(date +%s) - start_ts ))
+if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
+    ok "security-info completes in ${elapsed}s despite a wedged 'ufw' binary on PATH (bounded, not the full 60s hang)"
+else
+    bad "security-info did not complete promptly with a wedged ufw binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_security_hang.err)"
+fi
+if grep -A2 '^UFW$' /tmp/toolkit_test_security_hang.out | grep -q 'N/A'; then
+    ok "security-info degrades UFW to N/A gracefully rather than hanging or crashing when ufw is wedged"
+else
+    bad "security-info did not gracefully report UFW as N/A for a wedged ufw: $(cat /tmp/toolkit_test_security_hang.out)"
+fi
+rm -rf -- "$HANG_DIR"
+
+echo "== SECURITY: a wedged 'nvidia-smi' binary does not hang gpu-info =="
+HANG_DIR="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/nvidia-smi"
+chmod +x "${HANG_DIR}/nvidia-smi"
+start_ts=$(date +%s)
+PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/gpu-info" >/tmp/toolkit_test_gpu_hang.out 2>/tmp/toolkit_test_gpu_hang.err
+hang_rc=$?
+elapsed=$(( $(date +%s) - start_ts ))
+if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
+    ok "gpu-info completes in ${elapsed}s despite a wedged 'nvidia-smi' binary on PATH (bounded, not the full 60s hang)"
+else
+    bad "gpu-info did not complete promptly with a wedged nvidia-smi binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_gpu_hang.err)"
+fi
+if grep -q '^GPU: N/A$' /tmp/toolkit_test_gpu_hang.out; then
+    ok "gpu-info degrades to 'GPU: N/A' gracefully rather than hanging or crashing when nvidia-smi is wedged"
+else
+    bad "gpu-info did not gracefully report GPU: N/A for a wedged nvidia-smi: $(cat /tmp/toolkit_test_gpu_hang.out)"
+fi
+rm -rf -- "$HANG_DIR"
+
+echo "== SECURITY: a wedged 'ss' binary does not hang network-info =="
+HANG_DIR="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/ss"
+chmod +x "${HANG_DIR}/ss"
+start_ts=$(date +%s)
+PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/network-info" >/tmp/toolkit_test_network_hang.out 2>/tmp/toolkit_test_network_hang.err
+hang_rc=$?
+elapsed=$(( $(date +%s) - start_ts ))
+if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
+    ok "network-info completes in ${elapsed}s despite a wedged 'ss' binary on PATH (bounded, not the full 60s hang)"
+else
+    bad "network-info did not complete promptly with a wedged ss binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_network_hang.err)"
+fi
+if grep -A2 '^LISTENING PORTS$' /tmp/toolkit_test_network_hang.out | grep -q 'None'; then
+    ok "network-info degrades LISTENING PORTS to 'None' gracefully rather than hanging or crashing when ss is wedged"
+else
+    bad "network-info did not gracefully report 'None' for LISTENING PORTS with a wedged ss: $(cat /tmp/toolkit_test_network_hang.out)"
+fi
+rm -rf -- "$HANG_DIR"
+
+echo "== SECURITY: a wedged systemd (systemctl) does not hang an interactive bin/tui session - SIGINT still terminates it within a bounded time and restores the terminal =="
+# bin/tui's own SERVICES panel calls lib/services.sh's systemd_available /
+# get_all_service_units / get_failed_service_units directly (unlike its
+# DOCKER/NETWORK/SECURITY panels, which currently go through lib/system.sh
+# - out of this fix's scope), so a wedged systemctl is a real, currently
+# reachable hang in the live interactive TUI, not just in the standalone
+# services-info command. This reuses the exact pty/script harness the
+# existing "tui: SIGINT" test above already uses, with one addition: a
+# wedged systemctl on PATH.
+if command -v script >/dev/null 2>&1; then
+    TUI_HANG_DIR="$(mktemp -d)"
+    printf '#!/usr/bin/env bash\nsleep 60\n' >"${TUI_HANG_DIR}/systemctl"
+    chmod +x "${TUI_HANG_DIR}/systemctl"
+    TUI_TMP4="$(mktemp -d)"
+    mkdir -p "${TUI_TMP4}/sigtest"
+    set -m
+    PATH="${TUI_HANG_DIR}:${PATH}" TOOLKIT_CONFIG_DIR="${TUI_TMP4}/sigtest" script -qec "${BIN_DIR}/tui" /dev/null >/dev/null 2>&1 &
+    script_pid=$!
+    set +m
+    sleep 1
+    tui_pid="$(pgrep -P "$script_pid" | head -n1)"
+    if [[ -n "$tui_pid" ]]; then
+        kill -INT "$tui_pid" 2>/dev/null
+        waited=0
+        while kill -0 "$tui_pid" 2>/dev/null && [[ "$waited" -lt 10 ]]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+        if kill -0 "$tui_pid" 2>/dev/null; then
+            bad "bin/tui did not terminate within 10s of SIGINT while systemctl was wedged - the hang defers signal handling indefinitely"
+            kill -KILL "$tui_pid" 2>/dev/null
+        else
+            ok "bin/tui terminates promptly on SIGINT even with a wedged systemctl (waited ${waited}s, well under the 60s wedge)"
+        fi
+    else
+        bad "could not locate the bin/tui process to send SIGINT to (script/pty setup may have failed)"
+    fi
+    kill -KILL "$script_pid" 2>/dev/null
+    wait "$script_pid" 2>/dev/null
+    rm -rf "$TUI_TMP4" "$TUI_HANG_DIR"
+else
+    ok "script command not available - skipping wedged-systemctl SIGINT pty test (environment limitation, not a code issue)"
 fi
 
 echo "== tui: key-action mapping (pure function, no terminal needed) =="

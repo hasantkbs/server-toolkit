@@ -152,26 +152,45 @@ printf '\n'
 # ----------------------------------------------------------- LARGEST FILES ---
 print_header "LARGEST FILES"
 
+# NUL-delimited throughout: a filename can legally contain an embedded
+# newline (a path can never contain a NUL byte - kernel-enforced), so this
+# whole pipeline - collection, merge, sort, and per-record parsing - stays
+# NUL-delimited end to end rather than falling back to newline-delimited
+# text at any stage, which would let a maliciously named file forge a fake
+# record (see lib/storage.sh::get_large_files_in). Never capture any of
+# this via `x="$(...)"` - bash's command substitution silently drops NUL
+# bytes, corrupting the record framing.
 large_file_entries=()
 for dir in "${LARGE_FILE_SEARCH_DIRS[@]}"; do
     [[ -d "$dir" ]] || continue
-    if files="$(get_large_files_in "$dir" "$LARGE_FILE_MIN_SIZE")" && [[ -n "$files" ]]; then
-        large_file_entries+=("$files")
-    fi
+    while IFS= read -r -d '' entry; do
+        large_file_entries+=("$entry")
+    done < <(get_large_files_in "$dir" "$LARGE_FILE_MIN_SIZE")
 done
 
 huge_file_count=0
+printed_file_count=0
 if [[ "${#large_file_entries[@]}" -gt 0 ]]; then
-    sorted_files="$(printf '%s\n' "${large_file_entries[@]}" | sort -t $'\t' -k1,1 -rn | awk -F'\t' -v n="$LARGEST_FILES_COUNT" 'NR<=n')"
-    while IFS=$'\t' read -r bytes path; do
+    while IFS= read -r -d '' entry; do
+        [[ "$printed_file_count" -ge "$LARGEST_FILES_COUNT" ]] && break
+        # Parameter expansion, not `read`, splits bytes/path - `read`
+        # stops at the first newline, which would cut off a path that
+        # legitimately contains one.
+        bytes="${entry%%$'\t'*}"
+        path="${entry#*$'\t'}"
+        # Defense in depth: NUL-delimited records already make record
+        # forgery structurally impossible, but never let a value that
+        # wasn't first proven to be pure digits reach a bash arithmetic
+        # comparison (`-ge` below forces arithmetic evaluation).
+        [[ "$bytes" =~ ^[0-9]+$ ]] || continue
         [[ -z "$path" ]] && continue
+        printed_file_count=$(( printed_file_count + 1 ))
         label=""
         [[ "$bytes" -ge "$LARGE_FILE_ALERT_BYTES" ]] && { label="  [!]"; huge_file_count=$(( huge_file_count + 1 )); }
         printf '%-60s %8s%s\n' "$path" "$(bytes_to_human "$bytes")" "$label"
-    done <<<"$sorted_files"
-else
-    printf 'None\n'
+    done < <(printf '%s\0' "${large_file_entries[@]}" | sort -z -t $'\t' -k1,1 -rn)
 fi
+[[ "$printed_file_count" -eq 0 ]] && printf 'None\n'
 
 if [[ "$huge_file_count" -gt 0 ]]; then
     alerts+=("${huge_file_count} file(s) at or above 1GB found under scanned paths (see LARGEST FILES)")

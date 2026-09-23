@@ -362,6 +362,136 @@ else
 fi
 rm -rf "$TH"
 
+# --- Regression tests for the Phase 2 remediation round (wrapper
+# command-injection via HOME/XDG_DATA_HOME, and unbounded --purge-config
+# deletion). Each reproduces a real, verified finding, not a hypothetical.
+
+echo "== SECURITY: a \$(...) payload in XDG_DATA_HOME cannot inject live shell syntax into the installed wrapper =="
+# st_write_wrapper used to splice install_dir into the wrapper file via an
+# UNQUOTED heredoc (expanded at write time) whose exec line then wrapped
+# the result in double quotes - so a live $(...) left over from a hostile
+# HOME/XDG_DATA_HOME value at install time became live shell syntax that
+# re-executes on every future run of the installed wrapper. This
+# reproduces that end-to-end: a real hostile XDG_DATA_HOME, a real
+# install, then actually running the real generated wrapper and checking
+# for a real canary file - not a source grep.
+TH="$(st_test_home)"
+WRAP_CANARY="${TH}/wrapper-injection-canary"
+rm -f "$WRAP_CANARY"
+# Anchored under $TH (absolute) so this stays inside the disposable
+# sandbox even though XDG_DATA_HOME is otherwise attacker-controlled text
+# - st_data_home() returns XDG_DATA_HOME completely unmodified when it's
+# set, so a value that didn't start with '/' would make the later
+# `mkdir -p "$data_home"` create directories relative to wherever this
+# test happens to be invoked from, leaking outside $TH.
+HOSTILE_XDG_DATA_HOME="${TH}/\$(touch ${WRAP_CANARY})/data-home"
+out="$(HOME="$TH" XDG_DATA_HOME="$HOSTILE_XDG_DATA_HOME" bash "$INSTALL_SH" install 2>&1)"
+install_rc=$?
+WRAPPER="${TH}/.local/bin/server-toolkit"
+"$WRAPPER" --help >/dev/null 2>&1 || true
+if [[ "$install_rc" -eq 0 ]] && [[ -f "$WRAPPER" ]] && grep -qF "$WRAP_CANARY" "$WRAPPER" && [[ ! -f "$WRAP_CANARY" ]]; then
+    ok "SECURITY: a \$(...) payload in XDG_DATA_HOME lands in the wrapper as inert text (still present, unexecuted) and never fires - neither at install time nor when the wrapper is run"
+else
+    bad "SECURITY: hostile XDG_DATA_HOME was not safely neutralized (install rc=$install_rc, wrapper exists: $([[ -f "$WRAPPER" ]] && echo yes || echo no), canary fired: $([[ -f "$WRAP_CANARY" ]] && echo yes || echo no)): $out"
+fi
+rm -f -- "$WRAP_CANARY"
+rm -rf -- "$TH"
+
+echo "== install: a normal HOME/XDG_DATA_HOME still produces a working wrapper that execs the real dispatcher with all arguments intact =="
+TH="$(st_test_home)"
+HOME="$TH" bash "$INSTALL_SH" install >/dev/null 2>&1
+WRAPPER="${TH}/.local/bin/server-toolkit"
+if result="$("$WRAPPER" info 2>&1)" && grep -q '^SERVER$' <<<"$result"; then
+    ok "the generated wrapper still execs the real dispatcher and runs a real diagnostic for a normal install path"
+else
+    bad "the generated wrapper failed for a normal (non-hostile) install: $result"
+fi
+rm -rf -- "$TH"
+
+echo "== uninstall --purge-config: removes both a config file and a modules/ directory, then the now-empty config directory itself =="
+TH="$(st_test_home)"
+HOME="$TH" bash "$INSTALL_SH" install >/dev/null 2>&1
+mkdir -p "${TH}/.config/server-toolkit/modules"
+printf 'RAM_ALERT_PCT=77\n' > "${TH}/.config/server-toolkit/config"
+printf '#!/usr/bin/env bash\n' > "${TH}/.config/server-toolkit/modules/example.sh"
+out="$(HOME="$TH" bash "$INSTALL_SH" uninstall --purge-config 2>&1)"
+if [[ ! -e "${TH}/.config/server-toolkit" ]] && grep -q '^Configuration removed:' <<<"$out"; then
+    ok "uninstall --purge-config removes both the config file and the modules/ directory, then the now-empty config directory itself"
+else
+    bad "uninstall --purge-config did not fully/cleanly remove config+modules: $out"
+fi
+rm -rf -- "$TH"
+
+echo "== SECURITY: uninstall --purge-config never recursively deletes the config directory itself - only its own known entries, leaving unrelated content and a non-empty directory in place =="
+# The purge branch used to be an unconditional `rm -rf -- "$config_dir"`.
+# TOOLKIT_CONFIG_DIR (or a stray XDG_CONFIG_HOME/server-toolkit) is a
+# full, user-controlled override with no marker file (the toolkit never
+# creates this directory itself) - so a directory with unrelated content
+# living alongside a real config/modules must survive a purge intact.
+TH="$(st_test_home)"
+HOME="$TH" bash "$INSTALL_SH" install >/dev/null 2>&1
+mkdir -p "${TH}/.config/server-toolkit/modules"
+printf 'RAM_ALERT_PCT=77\n' > "${TH}/.config/server-toolkit/config"
+printf 'a-real-module\n' > "${TH}/.config/server-toolkit/modules/example.sh"
+mkdir -p "${TH}/.config/server-toolkit/unrelated-app-data"
+printf 'unrelated-victim-content\n' > "${TH}/.config/server-toolkit/unrelated-app-data/victim.txt"
+printf 'another-unrelated-file\n' > "${TH}/.config/server-toolkit/unrelated-file.txt"
+out="$(HOME="$TH" bash "$INSTALL_SH" uninstall --purge-config 2>&1)"
+rc=$?
+if [[ "$rc" -eq 0 ]] \
+    && [[ ! -e "${TH}/.config/server-toolkit/config" ]] \
+    && [[ ! -e "${TH}/.config/server-toolkit/modules" ]] \
+    && [[ -f "${TH}/.config/server-toolkit/unrelated-app-data/victim.txt" ]] \
+    && [[ "$(cat "${TH}/.config/server-toolkit/unrelated-app-data/victim.txt")" == "unrelated-victim-content" ]] \
+    && [[ -f "${TH}/.config/server-toolkit/unrelated-file.txt" ]] \
+    && [[ -d "${TH}/.config/server-toolkit" ]]; then
+    ok "SECURITY: --purge-config removes only its own config/modules entries, leaves unrelated content in the config directory untouched, and does not remove the now-non-empty directory itself"
+else
+    bad "SECURITY: --purge-config destroyed or missed unrelated content in the config directory (rc=$rc): $out"
+fi
+rm -rf -- "$TH"
+
+echo "== SECURITY: uninstall --purge-config removes a symlinked 'modules' entry as the link itself, never following it into a victim directory =="
+TH="$(st_test_home)"
+HOME="$TH" bash "$INSTALL_SH" install >/dev/null 2>&1
+mkdir -p "${TH}/.config/server-toolkit"
+VICTIM_DIR="$(mktemp -d "/tmp/server-toolkit-test-purge-victim-dir.XXXXXX")"
+printf 'canary\n' > "${VICTIM_DIR}/victim.txt"
+ln -s "$VICTIM_DIR" "${TH}/.config/server-toolkit/modules"
+printf 'RAM_ALERT_PCT=77\n' > "${TH}/.config/server-toolkit/config"
+out="$(HOME="$TH" bash "$INSTALL_SH" uninstall --purge-config 2>&1)"
+rc=$?
+if [[ "$rc" -eq 0 ]] \
+    && [[ ! -e "${TH}/.config/server-toolkit/modules" ]] \
+    && [[ -d "$VICTIM_DIR" ]] \
+    && [[ -f "${VICTIM_DIR}/victim.txt" ]] \
+    && [[ "$(cat "${VICTIM_DIR}/victim.txt")" == "canary" ]]; then
+    ok "SECURITY: a symlinked 'modules' entry is removed as the link itself - the directory it points to is left completely untouched"
+else
+    bad "SECURITY: a symlinked 'modules' entry was followed into the victim directory it points to (rc=$rc, victim intact: $([[ -f "${VICTIM_DIR}/victim.txt" ]] && echo yes || echo no)): $out"
+fi
+rm -rf -- "$TH" "$VICTIM_DIR"
+
+echo "== SECURITY: uninstall --purge-config removes a symlinked 'config' entry as the link itself, never following it into a victim file =="
+TH="$(st_test_home)"
+HOME="$TH" bash "$INSTALL_SH" install >/dev/null 2>&1
+mkdir -p "${TH}/.config/server-toolkit"
+VICTIM_FILE="$(mktemp "/tmp/server-toolkit-test-purge-victim-file.XXXXXX")"
+printf 'canary-file-content\n' > "$VICTIM_FILE"
+ln -s "$VICTIM_FILE" "${TH}/.config/server-toolkit/config"
+out="$(HOME="$TH" bash "$INSTALL_SH" uninstall --purge-config 2>&1)"
+rc=$?
+if [[ "$rc" -eq 0 ]] \
+    && [[ ! -e "${TH}/.config/server-toolkit/config" ]] \
+    && [[ -f "$VICTIM_FILE" ]] \
+    && [[ "$(cat "$VICTIM_FILE")" == "canary-file-content" ]]; then
+    ok "SECURITY: a symlinked 'config' entry is removed as the link itself - the file it points to is left completely untouched"
+else
+    bad "SECURITY: a symlinked 'config' entry was followed into the victim file it points to (rc=$rc, victim intact: $([[ -f "$VICTIM_FILE" ]] && echo yes || echo no)): $out"
+fi
+rm -rf -- "$TH"
+rm -f -- "$VICTIM_FILE"
+
 echo
 echo "Results: ${pass} passed, ${fail} failed"
 [[ "$fail" -eq 0 ]]
