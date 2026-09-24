@@ -128,11 +128,13 @@ get_disk_stats() {
     printf '%s %s %s' "$used" "$size" "$pcent"
 }
 
-# Detects the interface carrying the default route.
+# Detects the interface carrying the default route. Time-bounded like
+# every other single-shot external-tool check in this codebase - a wedged
+# `ip` must never hang a caller (bin/info, bin/tui) indefinitely.
 get_primary_interface() {
-    if command_exists ip && command_exists jq; then
+    if command_exists ip && command_exists jq && command_exists timeout; then
         local iface
-        iface="$(ip -j route show default 2>/dev/null | jq -r '.[0].dev // empty')"
+        iface="$(timeout 3 ip -j route show default 2>/dev/null | jq -r '.[0].dev // empty')"
         if [[ -n "$iface" ]]; then
             printf '%s' "$iface"
             return
@@ -163,25 +165,34 @@ get_link_speed() {
     printf 'N/A'
 }
 
+# Time-bounded - see get_primary_interface.
 get_ipv4_address() {
     local iface="$1"
     [[ -z "$iface" ]] && { printf ''; return; }
-    if command_exists ip && command_exists jq; then
-        ip -j -4 addr show dev "$iface" 2>/dev/null | jq -r '.[0].addr_info[0].local // empty'
+    if command_exists ip && command_exists jq && command_exists timeout; then
+        timeout 3 ip -j -4 addr show dev "$iface" 2>/dev/null | jq -r '.[0].addr_info[0].local // empty'
         return
     fi
     printf ''
 }
 
 # Prints the Docker server version, or empty if the daemon is unreachable.
+# Time-bounded like every other single-shot external-tool check in this
+# codebase (see lib/logs.sh's journalctl calls, and the same convention
+# already applied to lib/docker.sh/services.sh/security.sh/gpu.sh/network.sh)
+# - a wedged Docker daemon must never hang a caller (bin/info, bin/tui)
+# indefinitely.
 get_docker_version() {
-    safe_run docker version --format '{{.Server.Version}}' || printf ''
+    command_exists timeout || { printf ''; return; }
+    safe_run timeout 3 docker version --format '{{.Server.Version}}' || printf ''
 }
 
-# Prints "running total" container counts, or empty if the daemon is unreachable.
+# Prints "running total" container counts, or empty if the daemon is
+# unreachable or the call times out.
 get_docker_container_counts() {
+    command_exists timeout || { printf ''; return; }
     local json
-    if ! json="$(docker info --format '{{json .}}' 2>/dev/null)"; then
+    if ! json="$(timeout 3 docker info --format '{{json .}}' 2>/dev/null)"; then
         printf ''
         return
     fi
@@ -193,10 +204,11 @@ get_docker_container_counts() {
 
 # Prints the count of containers reporting a healthy healthcheck, or empty
 # string if no containers report health information at all (or docker is
-# unavailable).
+# unavailable / the call times out).
 get_docker_healthy_count() {
+    command_exists timeout || { printf ''; return; }
     local statuses
-    if ! statuses="$(docker ps --format '{{.Status}}' 2>/dev/null)"; then
+    if ! statuses="$(timeout 3 docker ps --format '{{.Status}}' 2>/dev/null)"; then
         printf ''
         return
     fi
@@ -213,10 +225,12 @@ get_docker_healthy_count() {
     fi
 }
 
-# Prints the count of containers currently reporting an unhealthy healthcheck.
+# Prints the count of containers currently reporting an unhealthy
+# healthcheck (0 if docker is unavailable or the call times out).
 get_docker_unhealthy_count() {
+    command_exists timeout || { printf '0'; return; }
     local statuses
-    if ! statuses="$(docker ps --format '{{.Status}}' 2>/dev/null)"; then
+    if ! statuses="$(timeout 3 docker ps --format '{{.Status}}' 2>/dev/null)"; then
         printf '0'
         return
     fi
@@ -224,11 +238,13 @@ get_docker_unhealthy_count() {
     grep -c '(unhealthy)' <<<"$statuses" || true
 }
 
-# Prints "NAME CPU% MEM" for the top N containers by CPU usage, one per line.
+# Prints "NAME CPU% MEM" for the top N containers by CPU usage, one per
+# line. Time-bounded - see get_docker_version.
 get_top_containers() {
     local n="${1:-2}"
+    command_exists timeout || return 1
     local raw
-    if ! raw="$(docker stats --no-stream --format '{{.Name}}	{{.CPUPerc}}	{{.MemUsage}}' 2>/dev/null)"; then
+    if ! raw="$(timeout 5 docker stats --no-stream --format '{{.Name}}	{{.CPUPerc}}	{{.MemUsage}}' 2>/dev/null)"; then
         return 1
     fi
     [[ -z "$raw" ]] && return 1
@@ -240,13 +256,20 @@ get_top_containers() {
         | awk -F'\t' -v n="$n" 'NR<=n { split($3,mem," / "); print $1"\t"$2"\t"mem[1] }'
 }
 
+# Time-bounded like every other single-shot external-tool check in this
+# codebase - a wedged ufw must never hang a caller (bin/info, bin/tui)
+# indefinitely.
 get_ufw_status() {
     if ! command_exists ufw; then
         printf ''
         return
     fi
+    if ! command_exists timeout; then
+        printf ''
+        return
+    fi
     local out
-    if ! out="$(ufw status 2>/dev/null)"; then
+    if ! out="$(timeout 3 ufw status 2>/dev/null)"; then
         printf 'N/A'
         return
     fi
@@ -259,13 +282,20 @@ get_ufw_status() {
     fi
 }
 
+# Time-bounded - see get_ufw_status. Currently unused by any bin/* entry
+# point, but fixed for consistency with every other systemctl/docker/ufw/ip
+# call in this file rather than leaving an unbounded call dormant here.
 get_failed_units_count() {
     if ! command_exists systemctl; then
         printf 'N/A'
         return
     fi
+    if ! command_exists timeout; then
+        printf 'N/A'
+        return
+    fi
     local out
-    out="$(systemctl --failed --no-legend --no-pager 2>/dev/null)" || { printf 'N/A'; return; }
+    out="$(timeout 3 systemctl --failed --no-legend --no-pager 2>/dev/null)" || { printf 'N/A'; return; }
     if [[ -z "$out" ]]; then
         printf '0'
     else

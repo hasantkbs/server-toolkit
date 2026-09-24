@@ -4457,15 +4457,128 @@ else
 fi
 rm -rf -- "$HANG_DIR"
 
+echo "== SECURITY: a wedged 'docker' binary does not hang TUI_ONCE=1 bin/tui (DOCKER panel, lib/system.sh) =="
+# bin/tui's DOCKER panel (tui_content_docker) calls lib/system.sh's
+# get_docker_version / get_docker_container_counts / get_docker_healthy_count
+# directly - a second, independent set of docker call sites from the
+# lib/docker.sh ones already covered above (docker-info uses lib/docker.sh;
+# bin/tui and bin/info use lib/system.sh for their DOCKER panels). Both are
+# now timeout-wrapped.
+HANG_DIR="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/docker"
+chmod +x "${HANG_DIR}/docker"
+start_ts=$(date +%s)
+PATH="${HANG_DIR}:${PATH}" TUI_ONCE=1 timeout 20 "${BIN_DIR}/tui" </dev/null >/tmp/toolkit_test_tui_docker_hang.out 2>/tmp/toolkit_test_tui_docker_hang.err
+hang_rc=$?
+elapsed=$(( $(date +%s) - start_ts ))
+if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
+    ok "TUI_ONCE=1 bin/tui completes in ${elapsed}s despite a wedged 'docker' binary on PATH (bounded, not the full 60s hang)"
+else
+    bad "TUI_ONCE=1 bin/tui did not complete promptly with a wedged docker binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_tui_docker_hang.err)"
+fi
+# Full-width TUI_ONCE output renders DOCKER/GPU as a two-column block
+# (tui_two_col), so a DOCKER-panel line is followed by " | " and GPU
+# content on the SAME physical line - not matchable with an anchored
+# '^DOCKER$'. Scope the check to the DOCKER block's own lines instead.
+if grep -A2 'DOCKER' /tmp/toolkit_test_tui_docker_hang.out | grep -q 'unavailable'; then
+    ok "tui DOCKER panel degrades to 'unavailable' gracefully rather than hanging or crashing when docker is wedged"
+else
+    bad "tui DOCKER panel did not gracefully report unavailable for a wedged docker: $(cat /tmp/toolkit_test_tui_docker_hang.out)"
+fi
+rm -rf -- "$HANG_DIR"
+
+echo "== SECURITY: a wedged 'ufw' binary does not hang TUI_ONCE=1 bin/tui (SECURITY panel, lib/system.sh) =="
+# bin/tui's SECURITY panel (tui_content_security) calls lib/system.sh's
+# get_ufw_status directly - a second, independent call site from
+# lib/security.sh's get_ufw_status_raw already covered above (security-info
+# uses lib/security.sh; bin/tui and bin/info use lib/system.sh). Both now
+# timeout-wrapped.
+HANG_DIR="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/ufw"
+chmod +x "${HANG_DIR}/ufw"
+start_ts=$(date +%s)
+PATH="${HANG_DIR}:${PATH}" TUI_ONCE=1 timeout 20 "${BIN_DIR}/tui" </dev/null >/tmp/toolkit_test_tui_ufw_hang.out 2>/tmp/toolkit_test_tui_ufw_hang.err
+hang_rc=$?
+elapsed=$(( $(date +%s) - start_ts ))
+if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
+    ok "TUI_ONCE=1 bin/tui completes in ${elapsed}s despite a wedged 'ufw' binary on PATH (bounded, not the full 60s hang)"
+else
+    bad "TUI_ONCE=1 bin/tui did not complete promptly with a wedged ufw binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_tui_ufw_hang.err)"
+fi
+# Same two-column caveat as the DOCKER test above - scope to the
+# SECURITY block's own lines rather than anchoring to a full line.
+if grep -A2 'SECURITY' /tmp/toolkit_test_tui_ufw_hang.out | grep -qE 'UFW +N/A'; then
+    ok "tui SECURITY panel degrades UFW to N/A gracefully rather than hanging or crashing when ufw is wedged"
+else
+    bad "tui SECURITY panel did not gracefully report UFW N/A for a wedged ufw: $(cat /tmp/toolkit_test_tui_ufw_hang.out)"
+fi
+rm -rf -- "$HANG_DIR"
+
+echo "== tui: healthy docker/ufw stubs still render correct real values through TUI_ONCE (no regression from timeout-wrapping) =="
+HEALTHY_DIR="$(mktemp -d)"
+cat >"${HEALTHY_DIR}/docker" <<'MOCKEOF'
+#!/usr/bin/env bash
+case "$1" in
+    version) printf '27.3.1\n' ;;
+    info) [[ "${2:-}" == "--format" ]] && printf '{"ContainersRunning":2,"Containers":3}\n' ;;
+    ps) [[ "${2:-}" == "--format" ]] && printf 'Up 2 hours (healthy)\nUp 1 hour (healthy)\nExited (0)\n' ;;
+esac
+exit 0
+MOCKEOF
+cat >"${HEALTHY_DIR}/ufw" <<'MOCKEOF'
+#!/usr/bin/env bash
+printf 'Status: active\n'
+exit 0
+MOCKEOF
+chmod +x "${HEALTHY_DIR}/docker" "${HEALTHY_DIR}/ufw"
+result="$(PATH="${HEALTHY_DIR}:${PATH}" TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null)"
+rc=$?
+rm -rf -- "$HEALTHY_DIR"
+# Two-column layout (see the wedged-docker/wedged-ufw tests above) means
+# "Running" also appears under the unrelated SERVICES panel on the same
+# RESOURCES|SERVICES row - scope each check to its own panel's block
+# (DOCKER, then SECURITY) so this can't cross-match SERVICES' real
+# (environment-dependent) running-service count.
+docker_block="$(grep -A3 'DOCKER' <<<"$result")"
+security_block="$(grep -A2 'SECURITY' <<<"$result")"
+if [[ "$rc" -eq 0 ]] && grep -qE 'Running +2' <<<"$docker_block" && grep -qE 'Healthy +2' <<<"$docker_block" && grep -qE 'UFW +active' <<<"$security_block"; then
+    ok "tui overview shows real docker container/health counts and a real UFW status through healthy stubs (timeout-wrapping introduced no regression)"
+else
+    bad "tui overview did not correctly reflect healthy mocked docker/ufw output: $result"
+fi
+
+echo "== SECURITY: a wedged 'docker' binary does not hang the standalone info dashboard (bin/info shares lib/system.sh's DOCKER panel) =="
+HANG_DIR="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/docker"
+chmod +x "${HANG_DIR}/docker"
+start_ts=$(date +%s)
+PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/info" >/tmp/toolkit_test_info_docker_hang.out 2>/tmp/toolkit_test_info_docker_hang.err
+hang_rc=$?
+elapsed=$(( $(date +%s) - start_ts ))
+if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
+    ok "info completes in ${elapsed}s despite a wedged 'docker' binary on PATH (bounded, not the full 60s hang)"
+else
+    bad "info did not complete promptly with a wedged docker binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_info_docker_hang.err)"
+fi
+# bin/info's print_header emits a title line then a separate rule line
+# before the section's own content, so the content is 2 lines after the
+# header, not 1.
+if grep -A2 '^DOCKER$' /tmp/toolkit_test_info_docker_hang.out | grep -q 'unavailable'; then
+    ok "info DOCKER section degrades to 'unavailable' gracefully rather than hanging or crashing when docker is wedged"
+else
+    bad "info DOCKER section did not gracefully report unavailable for a wedged docker: $(cat /tmp/toolkit_test_info_docker_hang.out)"
+fi
+rm -rf -- "$HANG_DIR"
+
 echo "== SECURITY: a wedged systemd (systemctl) does not hang an interactive bin/tui session - SIGINT still terminates it within a bounded time and restores the terminal =="
 # bin/tui's own SERVICES panel calls lib/services.sh's systemd_available /
-# get_all_service_units / get_failed_service_units directly (unlike its
-# DOCKER/NETWORK/SECURITY panels, which currently go through lib/system.sh
-# - out of this fix's scope), so a wedged systemctl is a real, currently
-# reachable hang in the live interactive TUI, not just in the standalone
-# services-info command. This reuses the exact pty/script harness the
-# existing "tui: SIGINT" test above already uses, with one addition: a
-# wedged systemctl on PATH.
+# get_all_service_units / get_failed_service_units directly. Its DOCKER/
+# NETWORK/SECURITY panels call lib/system.sh (get_docker_version etc.,
+# get_primary_interface/get_ipv4_address, get_ufw_status) - previously out
+# of Finding 4's scope, now fixed too (see the wedged-docker/wedged-ufw
+# TUI_ONCE tests above and the wedged-docker pty test below). This reuses
+# the exact pty/script harness the existing "tui: SIGINT" test above
+# already uses, with one addition: a wedged systemctl on PATH.
 if command -v script >/dev/null 2>&1; then
     TUI_HANG_DIR="$(mktemp -d)"
     printf '#!/usr/bin/env bash\nsleep 60\n' >"${TUI_HANG_DIR}/systemctl"
@@ -4499,6 +4612,47 @@ if command -v script >/dev/null 2>&1; then
     rm -rf "$TUI_TMP4" "$TUI_HANG_DIR"
 else
     ok "script command not available - skipping wedged-systemctl SIGINT pty test (environment limitation, not a code issue)"
+fi
+
+echo "== SECURITY: a wedged docker daemon does not hang an interactive bin/tui session - SIGINT still terminates it within a bounded time and restores the terminal =="
+# Same pty/script harness as the wedged-systemctl test above, but with a
+# wedged docker this time - docker was NOT reachable through the 5 files
+# fixed in the previous round (bin/tui's DOCKER panel goes through
+# lib/system.sh, not lib/docker.sh), so this specific scenario could not
+# be tested until lib/system.sh was fixed too.
+if command -v script >/dev/null 2>&1; then
+    TUI_HANG_DIR="$(mktemp -d)"
+    printf '#!/usr/bin/env bash\nsleep 60\n' >"${TUI_HANG_DIR}/docker"
+    chmod +x "${TUI_HANG_DIR}/docker"
+    TUI_TMP5="$(mktemp -d)"
+    mkdir -p "${TUI_TMP5}/sigtest"
+    set -m
+    PATH="${TUI_HANG_DIR}:${PATH}" TOOLKIT_CONFIG_DIR="${TUI_TMP5}/sigtest" script -qec "${BIN_DIR}/tui" /dev/null >/dev/null 2>&1 &
+    script_pid=$!
+    set +m
+    sleep 1
+    tui_pid="$(pgrep -P "$script_pid" | head -n1)"
+    if [[ -n "$tui_pid" ]]; then
+        kill -INT "$tui_pid" 2>/dev/null
+        waited=0
+        while kill -0 "$tui_pid" 2>/dev/null && [[ "$waited" -lt 10 ]]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+        if kill -0 "$tui_pid" 2>/dev/null; then
+            bad "bin/tui did not terminate within 10s of SIGINT while docker was wedged - the hang defers signal handling indefinitely"
+            kill -KILL "$tui_pid" 2>/dev/null
+        else
+            ok "bin/tui terminates promptly on SIGINT even with a wedged docker daemon (waited ${waited}s, well under the 60s wedge)"
+        fi
+    else
+        bad "could not locate the bin/tui process to send SIGINT to (script/pty setup may have failed)"
+    fi
+    kill -KILL "$script_pid" 2>/dev/null
+    wait "$script_pid" 2>/dev/null
+    rm -rf "$TUI_TMP5" "$TUI_HANG_DIR"
+else
+    ok "script command not available - skipping wedged-docker SIGINT pty test (environment limitation, not a code issue)"
 fi
 
 echo "== tui: key-action mapping (pure function, no terminal needed) =="
