@@ -44,8 +44,14 @@ source "${LIB_DIR}/config.sh"
 # shellcheck source=../lib/modules.sh
 source "${LIB_DIR}/modules.sh"
 
-# The one place this version string is defined.
-TOOLKIT_TUI_VERSION="0.14.0-dev"
+# Derived from bin/server-toolkit's TOOLKIT_VERSION - the single source
+# of truth for this project's version string (see lib/common.sh's
+# toolkit_version()) - rather than a second, independently-maintained
+# constant, so the CLI dispatcher and the TUI can never silently drift
+# into two different version numbers again (they previously did:
+# 0.13.0-dev vs 0.14.0-dev). Falls back to a clearly-synthetic value if
+# bin/server-toolkit can't be found, rather than failing under set -e.
+TOOLKIT_TUI_VERSION="$(toolkit_version 2>/dev/null || printf '0.0.0-unknown')"
 
 # Below this many columns, the dashboard renders as a single-column,
 # unboxed label:value listing instead of the two-column boxed layout.

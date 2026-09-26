@@ -8,6 +8,24 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Prints server-toolkit's canonical version string, read from the single
+# place it's literally assigned (bin/server-toolkit's own TOOLKIT_VERSION
+# line - see that file's comment). install.sh reads the same line itself,
+# with its own copy of this exact grep/sed pair, since it must stay
+# dependency-free from lib/*.sh; any other bin/* script that needs to
+# display a version (e.g. bin/tui) should call this function instead of
+# defining a second, independently-maintained version constant, so the
+# two can never silently drift apart again. Returns non-zero (prints
+# nothing) if bin/server-toolkit can't be found relative to this file.
+toolkit_version() {
+    local self_lib_dir bin_dir version
+    self_lib_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)" || return 1
+    bin_dir="$(cd -- "${self_lib_dir}/../bin" >/dev/null 2>&1 && pwd -P)" || return 1
+    version="$(grep -m1 '^TOOLKIT_VERSION=' "${bin_dir}/server-toolkit" 2>/dev/null | sed -E 's/^TOOLKIT_VERSION="([^"]*)"$/\1/')"
+    [[ -n "$version" ]] || return 1
+    printf '%s' "$version"
+}
+
 # Run a command and print its stdout; on failure print nothing and return 1.
 # Usage: if out="$(safe_run some_cmd --flag)"; then ... fi
 safe_run() {

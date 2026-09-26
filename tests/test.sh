@@ -4006,6 +4006,16 @@ version_definitions="$(grep -c 'TOOLKIT_VERSION=' "${BIN_DIR}/server-toolkit")"
 [[ "$version_definitions" -eq 1 ]] && ok "TOOLKIT_VERSION is assigned exactly once in bin/server-toolkit" \
     || bad "TOOLKIT_VERSION is assigned $version_definitions times, expected exactly 1"
 
+echo "== tui: reports the same version as bin/server-toolkit (single source of truth, never a second hardcoded constant) =="
+canonical_version="$(grep -m1 '^TOOLKIT_VERSION=' "${BIN_DIR}/server-toolkit" | sed -E 's/^TOOLKIT_VERSION="([^"]*)"$/\1/')"
+tui_once_out="$(TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null 2>/dev/null || true)"
+if [[ -n "$canonical_version" ]] && grep -qF "SERVER TOOLKIT" <<<"$tui_once_out" && grep -qF "$canonical_version" <<<"$tui_once_out"; then
+    ok "bin/tui's rendered header shows bin/server-toolkit's TOOLKIT_VERSION ($canonical_version) - no independent, driftable version constant"
+else
+    bad "bin/tui's rendered header did not show bin/server-toolkit's canonical version ($canonical_version) - the two have drifted apart again"
+fi
+unset canonical_version tui_once_out
+
 echo "== cli: all command mappings reach the correct underlying command =="
 declare -A CLI_EXPECTED_HEADERS=(
     [info]="SERVER"
