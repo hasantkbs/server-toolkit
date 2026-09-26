@@ -1,1 +1,12 @@
 .worktrees/
+.claude/
+
+# Internal AI-agent sprint-planning docs (kept locally, not shipped publicly —
+# contains internal workflow notes; see CLAUDE.md Sprint 17 for rationale).
+docs/superpowers/
+
+# Editor/OS cruft
+.DS_Store
+*.swp
+*.swo
+*~
