@@ -4315,6 +4315,33 @@ else
     bad "trap registration does not precede tput smcup (trap_line=$trap_line, smcup_line=$smcup_line)"
 fi
 
+# The three pty/script-based SIGINT tests below (this one, plus the
+# wedged-systemctl and wedged-docker variants further down) all locate
+# bin/tui's real pid the same way: `script` forks it as a direct child, so
+# `pgrep -P "$script_pid"` finds it. A single fixed-delay snapshot
+# (sleep 1; pgrep once) is an avoidable race - `script` allocating a pty
+# and bash sourcing bin/tui's 11 lib/*.sh files can occasionally take
+# longer than 1s under host load, and when it does, that one snapshot
+# finds nothing even though the process shows up moments later. Poll
+# instead of guessing a single delay: retry every 0.2s up to 5s total
+# (same bound the existing termination-wait already uses), returning as
+# soon as a child becomes visible. This changes only *how fast* discovery
+# notices the process - it still finds bin/tui's actual pid via the same
+# -P relationship, so a real SIGINT still goes to the real process.
+tui_find_pty_child() {
+    local parent_pid="$1" tries=0 found=""
+    while [[ "$tries" -lt 25 ]]; do
+        found="$(pgrep -P "$parent_pid" | head -n1)"
+        if [[ -n "$found" ]]; then
+            printf '%s\n' "$found"
+            return 0
+        fi
+        sleep 0.2
+        tries=$((tries + 1))
+    done
+    return 1
+}
+
 echo "== tui: SIGINT (Ctrl-C) terminates the interactive loop within a bounded time =="
 if command -v script >/dev/null 2>&1; then
     TUI_TMP3="$(mktemp -d)"
@@ -4323,8 +4350,7 @@ if command -v script >/dev/null 2>&1; then
     TOOLKIT_CONFIG_DIR="${TUI_TMP3}/sigtest" script -qec "${BIN_DIR}/tui" /dev/null >/dev/null 2>&1 &
     script_pid=$!
     set +m
-    sleep 1
-    tui_pid="$(pgrep -P "$script_pid" | head -n1)"
+    tui_pid="$(tui_find_pty_child "$script_pid")"
     if [[ -n "$tui_pid" ]]; then
         kill -INT "$tui_pid" 2>/dev/null
         waited=0
@@ -4589,8 +4615,7 @@ if command -v script >/dev/null 2>&1; then
     PATH="${TUI_HANG_DIR}:${PATH}" TOOLKIT_CONFIG_DIR="${TUI_TMP4}/sigtest" script -qec "${BIN_DIR}/tui" /dev/null >/dev/null 2>&1 &
     script_pid=$!
     set +m
-    sleep 1
-    tui_pid="$(pgrep -P "$script_pid" | head -n1)"
+    tui_pid="$(tui_find_pty_child "$script_pid")"
     if [[ -n "$tui_pid" ]]; then
         kill -INT "$tui_pid" 2>/dev/null
         waited=0
@@ -4630,8 +4655,7 @@ if command -v script >/dev/null 2>&1; then
     PATH="${TUI_HANG_DIR}:${PATH}" TOOLKIT_CONFIG_DIR="${TUI_TMP5}/sigtest" script -qec "${BIN_DIR}/tui" /dev/null >/dev/null 2>&1 &
     script_pid=$!
     set +m
-    sleep 1
-    tui_pid="$(pgrep -P "$script_pid" | head -n1)"
+    tui_pid="$(tui_find_pty_child "$script_pid")"
     if [[ -n "$tui_pid" ]]; then
         kill -INT "$tui_pid" 2>/dev/null
         waited=0
