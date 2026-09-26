@@ -13,14 +13,22 @@ container state, listening ports, running services, recent log errors,
 backup presence, and more - without installing or configuring a
 monitoring stack.
 
-Everything server-toolkit does is read-only by design. It inspects the
-system; it never changes it.
+Every built-in diagnostic command is read-only by design - it inspects
+the system, it never changes it. The two documented exceptions are the
+installer (`install.sh`, which only ever copies its own tree into your
+user-level install directories and, on `uninstall`, removes exactly
+what it installed - see `docs/install.md`) and the opt-in custom-modules
+feature, which runs a command *you* wrote and is off by default (see
+Custom modules below).
 
 ## Core features
 
-- **Read-only by design** - no command writes to, modifies, or deletes
-  anything on the system it's diagnosing (see Safety below).
-- **Zero required runtime dependencies** beyond Bash and standard
+- **Read-only by design** - no diagnostic command writes to, modifies,
+  or deletes anything on the system it's diagnosing (see Safety below;
+  the installer and the opt-in custom-modules feature are the two
+  documented exceptions, both described there).
+- **Zero required runtime dependencies** beyond Bash (4.3 or newer -
+  the codebase uses namerefs, `local -n`/`declare -n`) and standard
   coreutils, plus whatever each individual command is checking (e.g.
   `docker`, `systemctl`) - and every command degrades gracefully, with a
   clear message, when one of those isn't present rather than failing
@@ -31,8 +39,9 @@ system; it never changes it.
 - **An optional configuration layer** - override a handful of documented
   defaults (e.g. the RAM alert threshold) in a plain-text config file
   that is only ever read, never executed.
-- **An optional custom-modules system** - add your own read-only checks
-  to the dashboard without touching any built-in file.
+- **An optional custom-modules system** - add your own checks (any
+  shell command you write) to the dashboard without touching any
+  built-in file, gated behind an explicit opt-in trust model.
 - **An interactive TUI** - a live-refreshing, keyboard-driven dashboard
   over the same data `info` shows.
 - **A user-level installer** - no root, no package manager, no
@@ -171,8 +180,8 @@ config-backed setting are in `docs/config.md`.
 ## Custom modules
 
 Optional and off by default. Custom modules let you add your own
-read-only checks (any shell command you write) to `info`/`tui`'s
-dashboard, without touching any built-in file. They're gated by a
+checks (any shell command you write - not necessarily read-only) to
+`info`/`tui`'s dashboard, without touching any built-in file. They're gated by a
 two-gate trust model - a global `CUSTOM_MODULES_ENABLED=true` switch and
 each module's own `ENABLED=true` - and every module runs with a bounded
 timeout. The governing rule: **if you wouldn't type a command directly
@@ -215,12 +224,14 @@ threshold, a process exit code, ...), not a subjective "health score."
 
 ## Privacy
 
-No telemetry, no phone-home, no analytics. The only network activity any
-command performs is the one it's explicitly documented to do (e.g.
-`network-info`'s own connectivity checks) - nothing leaves the machine
-otherwise. If you enable custom modules, their commands run with your
-own user permissions and are entirely your own responsibility - see
-`docs/modules.md`.
+No telemetry, no phone-home, no analytics. The only outbound network
+activity any built-in command performs is `network-info`'s own DNS/
+connectivity probe - a single `ping` to `1.1.1.1` (Cloudflare's public
+resolver) to check basic internet reachability - nothing else leaves
+the machine. If you enable custom modules, their commands run with your
+own user permissions, can do anything a command you typed yourself
+could do (including network access), and are entirely your own
+responsibility - see `docs/modules.md`.
 
 ## Performance
 

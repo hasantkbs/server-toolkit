@@ -1,9 +1,13 @@
 # Custom Modules
 
-server-toolkit lets you add your own read-only diagnostic checks to
-`info` without touching any built-in file. This page explains what a
-custom module is, where it lives, how to turn it on, and — most
-importantly — the trust model you're opting into.
+server-toolkit lets you add your own diagnostic checks to `info`
+without touching any built-in file. A module can run any shell command
+you write, not only read-only ones — server-toolkit itself never
+generates or suggests one, and the feature is gated behind an explicit
+opt-in trust model (see below), but nothing stops a module's command
+from writing to disk. This page explains what a custom module is,
+where it lives, how to turn it on, and — most importantly — the trust
+model you're opting into.
 
 ## What is a custom module?
 

@@ -5068,7 +5068,28 @@ done
 # history, not public documentation) - the glob above is non-recursive
 # and never descends into it.
 
-PRIVACY_TOKEN_HITS="$(grep -nEi '<user>|<project-a>|<project-b>' "${PRIVACY_DOC_FILES[@]}" 2>/dev/null || true)"
+# The token pattern is derived at run time from the real caller's
+# username ($(whoami)/$USER, whichever this shell has) rather than
+# hardcoded - hardcoding a real identifier here would itself ship that
+# identifier in this public test file. Any maintainer-specific extra
+# terms (internal project code-names, etc.) can be supplied locally via
+# PRIVACY_EXTRA_TOKENS (a '|'-separated extended-regex fragment) without
+# ever committing them; the check runs regardless, just narrower without it.
+PRIVACY_WHOAMI="$(whoami 2>/dev/null || true)"
+PRIVACY_PATTERN="${PRIVACY_WHOAMI:-}"
+if [[ -n "${PRIVACY_EXTRA_TOKENS:-}" ]]; then
+    if [[ -n "$PRIVACY_PATTERN" ]]; then
+        PRIVACY_PATTERN="${PRIVACY_PATTERN}|${PRIVACY_EXTRA_TOKENS}"
+    else
+        PRIVACY_PATTERN="${PRIVACY_EXTRA_TOKENS}"
+    fi
+fi
+
+if [[ -n "$PRIVACY_PATTERN" ]]; then
+    PRIVACY_TOKEN_HITS="$(grep -nEi "$PRIVACY_PATTERN" "${PRIVACY_DOC_FILES[@]}" 2>/dev/null || true)"
+else
+    PRIVACY_TOKEN_HITS=""
+fi
 
 PRIVACY_IP_HITS=""
 while IFS= read -r privacy_line; do
@@ -5077,14 +5098,18 @@ while IFS= read -r privacy_line; do
     privacy_rest="${privacy_line#*:}"
     privacy_lineno="${privacy_rest%%:*}"
     privacy_ip="${privacy_rest#*:}"
-    # Allow-list: loopback/any, RFC1918 private ranges, and RFC5737
-    # documentation ranges - all legitimate in example documentation.
+    # Allow-list: loopback/any, RFC1918 private ranges, RFC5737
+    # documentation ranges, and this project's own actual, intentionally-
+    # named public probe target (network-info's connectivity check pings
+    # Cloudflare's well-known public resolver 1.1.1.1 - see lib/network.sh
+    # - naming it in README.md is accurate documentation, not a leak).
     case "$privacy_ip" in
         127.0.0.1|0.0.0.0) continue ;;
         10.*) continue ;;
         192.168.*) continue ;;
         172.1[6-9].*|172.2[0-9].*|172.3[01].*) continue ;;
         192.0.2.*|198.51.100.*|203.0.113.*) continue ;;
+        1.1.1.1) continue ;;
     esac
     PRIVACY_IP_HITS+="${privacy_file}:${privacy_lineno}: ${privacy_ip}"$'\n'
 done < <(grep -noE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' "${PRIVACY_DOC_FILES[@]}" 2>/dev/null)
