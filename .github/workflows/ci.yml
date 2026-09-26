@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck (warning or above fails the job)
+        run: |
+          shellcheck -S warning \
+            bin/backup-info bin/docker-info bin/gpu-info bin/info \
+            bin/logs-info bin/network-info bin/process-info \
+            bin/security-info bin/server-toolkit bin/services-info \
+            bin/storage-info bin/tui \
+            lib/backup.sh lib/common.sh lib/config.sh lib/docker.sh \
+            lib/gpu.sh lib/logs.sh lib/modules.sh lib/network.sh \
+            lib/process.sh lib/security.sh lib/services.sh lib/status.sh \
+            lib/storage.sh lib/system.sh \
+            install.sh tests/test-install.sh tests/test.sh
+
+      - name: Main test suite
+        run: bash tests/test.sh
+
+      - name: Installer test suite
+        run: bash tests/test-install.sh
