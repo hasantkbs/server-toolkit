@@ -95,6 +95,7 @@ term_width() {
 }
 
 # Print a horizontal rule made of the given character (default '─'), capped at 60 columns.
+# shellcheck disable=SC2120 # $1 is an intentional customization hook - no current caller passes one, all use the default
 print_rule() {
     local char="${1:-─}"
     local width

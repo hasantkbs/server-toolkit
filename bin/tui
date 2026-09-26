@@ -78,6 +78,7 @@ tui_color_enabled() {
 # Prints "full" or "narrow" for a given column count (defaults to the
 # real terminal width via tput, falling back to 80 if that fails - same
 # fallback lib/common.sh::term_width already uses).
+# shellcheck disable=SC2120 # $1 is passed by tests/test.sh (an override for deterministic narrow-mode testing), not from within this file
 tui_layout_mode() {
     local cols="${1:-}"
     if [[ -z "$cols" ]]; then
@@ -256,6 +257,7 @@ tui_gather_module_alerts() {
 # the narrow path deterministically, since a non-interactive test
 # context has no real terminal width for tui_layout_mode to measure and
 # would otherwise always fall back to its 80-column ("full") default.
+# shellcheck disable=SC2120 # $1 is passed by tests/test.sh, not from within this file
 tui_render_overview() {
     printf 'SERVER TOOLKIT%*s%s\n' 46 "" "${TOOLKIT_TUI_VERSION}"
     printf '\n'
