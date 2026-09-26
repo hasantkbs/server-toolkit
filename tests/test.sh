@@ -9,6 +9,15 @@ TOOLKIT_DIR="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 BIN_DIR="${TOOLKIT_DIR}/bin"
 LIB_DIR="${TOOLKIT_DIR}/lib"
 
+# A private, per-run temp root - most of this file's scratch files/dirs
+# live under here instead of bare /tmp, so two concurrent runs (or a
+# pre-planted file/symlink at a guessable /tmp path) can't collide with
+# or influence this run's fixtures (CWE-377). Not exhaustive - some
+# hardcoded /tmp paths remain (see CLAUDE.md) - but every security
+# canary this file has (the *-pwned paths) lives under here.
+TEST_TMP_ROOT="$(mktemp -d "/tmp/server-toolkit-test.XXXXXX")"
+trap 'rm -rf "$TEST_TMP_ROOT"' EXIT
+
 pass=0
 fail=0
 
@@ -25,41 +34,41 @@ for f in "${BIN_DIR}"/info "${BIN_DIR}"/gpu-info "${BIN_DIR}"/docker-info "${BIN
 done
 
 echo "== info runs successfully =="
-if "${BIN_DIR}/info" >/tmp/toolkit_test_info.out 2>/tmp/toolkit_test_info.err; then
+if "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_info.out" 2>"${TEST_TMP_ROOT}/toolkit_test_info.err"; then
     ok "info exits 0"
 else
-    bad "info exited non-zero: $(cat /tmp/toolkit_test_info.err)"
+    bad "info exited non-zero: $(cat "${TEST_TMP_ROOT}/toolkit_test_info.err")"
 fi
 
 echo "== gpu-info runs successfully =="
-if "${BIN_DIR}/gpu-info" >/tmp/toolkit_test_gpu.out 2>/tmp/toolkit_test_gpu.err; then
+if "${BIN_DIR}/gpu-info" >"${TEST_TMP_ROOT}/toolkit_test_gpu.out" 2>"${TEST_TMP_ROOT}/toolkit_test_gpu.err"; then
     ok "gpu-info exits 0"
 else
-    bad "gpu-info exited non-zero: $(cat /tmp/toolkit_test_gpu.err)"
+    bad "gpu-info exited non-zero: $(cat "${TEST_TMP_ROOT}/toolkit_test_gpu.err")"
 fi
 
 echo "== docker-info runs successfully (live Docker) =="
-if "${BIN_DIR}/docker-info" >/tmp/toolkit_test_docker.out 2>/tmp/toolkit_test_docker.err; then
+if "${BIN_DIR}/docker-info" >"${TEST_TMP_ROOT}/toolkit_test_docker.out" 2>"${TEST_TMP_ROOT}/toolkit_test_docker.err"; then
     ok "docker-info exits 0"
-    if grep -q '^CONTAINERS$' /tmp/toolkit_test_docker.out && grep -q '^HEALTH$' /tmp/toolkit_test_docker.out; then
+    if grep -q '^CONTAINERS$' "${TEST_TMP_ROOT}/toolkit_test_docker.out" && grep -q '^HEALTH$' "${TEST_TMP_ROOT}/toolkit_test_docker.out"; then
         ok "docker-info prints CONTAINERS and HEALTH sections"
     else
         bad "docker-info output is missing expected sections"
     fi
 else
-    bad "docker-info exited non-zero: $(cat /tmp/toolkit_test_docker.err)"
+    bad "docker-info exited non-zero: $(cat "${TEST_TMP_ROOT}/toolkit_test_docker.err")"
 fi
 
 echo "== network-info runs successfully (live network) =="
-if "${BIN_DIR}/network-info" >/tmp/toolkit_test_network.out 2>/tmp/toolkit_test_network.err; then
+if "${BIN_DIR}/network-info" >"${TEST_TMP_ROOT}/toolkit_test_network.out" 2>"${TEST_TMP_ROOT}/toolkit_test_network.err"; then
     ok "network-info exits 0"
-    if grep -q '^INTERFACES$' /tmp/toolkit_test_network.out && grep -q '^CONNECTIVITY$' /tmp/toolkit_test_network.out; then
+    if grep -q '^INTERFACES$' "${TEST_TMP_ROOT}/toolkit_test_network.out" && grep -q '^CONNECTIVITY$' "${TEST_TMP_ROOT}/toolkit_test_network.out"; then
         ok "network-info prints INTERFACES and CONNECTIVITY sections"
     else
         bad "network-info output is missing expected sections"
     fi
 else
-    bad "network-info exited non-zero: $(cat /tmp/toolkit_test_network.err)"
+    bad "network-info exited non-zero: $(cat "${TEST_TMP_ROOT}/toolkit_test_network.err")"
 fi
 
 echo "== primary interface detection works =="
@@ -107,15 +116,15 @@ else
 fi
 
 echo "== storage-info runs successfully (live filesystem) =="
-if "${BIN_DIR}/storage-info" >/tmp/toolkit_test_storage.out 2>/tmp/toolkit_test_storage.err; then
+if "${BIN_DIR}/storage-info" >"${TEST_TMP_ROOT}/toolkit_test_storage.out" 2>"${TEST_TMP_ROOT}/toolkit_test_storage.err"; then
     ok "storage-info exits 0"
-    if grep -q '^FILESYSTEM$' /tmp/toolkit_test_storage.out && grep -q '^DOCKER STORAGE$' /tmp/toolkit_test_storage.out; then
+    if grep -q '^FILESYSTEM$' "${TEST_TMP_ROOT}/toolkit_test_storage.out" && grep -q '^DOCKER STORAGE$' "${TEST_TMP_ROOT}/toolkit_test_storage.out"; then
         ok "storage-info prints FILESYSTEM and DOCKER STORAGE sections"
     else
         bad "storage-info output is missing expected sections"
     fi
 else
-    bad "storage-info exited non-zero: $(cat /tmp/toolkit_test_storage.err)"
+    bad "storage-info exited non-zero: $(cat "${TEST_TMP_ROOT}/toolkit_test_storage.err")"
 fi
 
 echo "== directory-size collection works with a mock directory tree =="
@@ -206,50 +215,50 @@ MOCKEOF
 chmod +x "${MOCK_DIR}/df"
 MOCK_PATH="${MOCK_DIR}:${PATH}"
 
-if DF_MOCK_SCENARIO=normal PATH="$MOCK_PATH" "${BIN_DIR}/storage-info" >/tmp/toolkit_test_storage_normal.out 2>/tmp/toolkit_test_storage_normal.err; then
-    if grep -qE '^/ +ext4' /tmp/toolkit_test_storage_normal.out; then
+if DF_MOCK_SCENARIO=normal PATH="$MOCK_PATH" "${BIN_DIR}/storage-info" >"${TEST_TMP_ROOT}/toolkit_test_storage_normal.out" 2>"${TEST_TMP_ROOT}/toolkit_test_storage_normal.err"; then
+    if grep -qE '^/ +ext4' "${TEST_TMP_ROOT}/toolkit_test_storage_normal.out"; then
         ok "storage-info FILESYSTEM section reflects mocked df output"
     else
         bad "storage-info did not show the mocked filesystem"
     fi
-    if grep -qE '^/ +5%$' /tmp/toolkit_test_storage_normal.out; then
+    if grep -qE '^/ +5%$' "${TEST_TMP_ROOT}/toolkit_test_storage_normal.out"; then
         ok "storage-info INODES section reflects mocked df output"
     else
         bad "storage-info did not show the mocked inode usage"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_storage_normal.out | grep -qi 'full\|critical\|high'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_storage_normal.out" | grep -qi 'full\|critical\|high'; then
         bad "storage-info raised a filesystem/inode alert for normal usage values"
     else
         ok "storage-info raises no filesystem/inode alerts for normal usage values"
     fi
 else
-    bad "storage-info failed with normal mocked df: $(cat /tmp/toolkit_test_storage_normal.err)"
+    bad "storage-info failed with normal mocked df: $(cat "${TEST_TMP_ROOT}/toolkit_test_storage_normal.err")"
 fi
 
-if DF_MOCK_SCENARIO=high PATH="$MOCK_PATH" "${BIN_DIR}/storage-info" >/tmp/toolkit_test_storage_high.out 2>/tmp/toolkit_test_storage_high.err; then
-    if grep -A10 '^ALERTS$' /tmp/toolkit_test_storage_high.out | grep -qi "'/data'.*critically full"; then
+if DF_MOCK_SCENARIO=high PATH="$MOCK_PATH" "${BIN_DIR}/storage-info" >"${TEST_TMP_ROOT}/toolkit_test_storage_high.out" 2>"${TEST_TMP_ROOT}/toolkit_test_storage_high.err"; then
+    if grep -A10 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_storage_high.out" | grep -qi "'/data'.*critically full"; then
         ok "storage-info raises a critical alert for a filesystem at 95%"
     else
         bad "storage-info did not raise a critical filesystem alert at 95%"
     fi
-    if grep -A10 '^ALERTS$' /tmp/toolkit_test_storage_high.out | grep -qi "inode usage on '/data' is critical"; then
+    if grep -A10 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_storage_high.out" | grep -qi "inode usage on '/data' is critical"; then
         ok "storage-info raises a critical inode-usage alert at 92% (>= 90% threshold)"
     else
         bad "storage-info did not raise a critical inode-usage alert at 92%"
     fi
 else
-    bad "storage-info failed with high-usage mocked df: $(cat /tmp/toolkit_test_storage_high.err)"
+    bad "storage-info failed with high-usage mocked df: $(cat "${TEST_TMP_ROOT}/toolkit_test_storage_high.err")"
 fi
 
-if DF_MOCK_SCENARIO=fail PATH="$MOCK_PATH" "${BIN_DIR}/storage-info" >/tmp/toolkit_test_storage_missingfs.out 2>/tmp/toolkit_test_storage_missingfs.err; then
-    if grep -A2 '^FILESYSTEM$' /tmp/toolkit_test_storage_missingfs.out | grep -q 'N/A' && \
-       grep -A2 '^INODES$' /tmp/toolkit_test_storage_missingfs.out | grep -q 'N/A'; then
+if DF_MOCK_SCENARIO=fail PATH="$MOCK_PATH" "${BIN_DIR}/storage-info" >"${TEST_TMP_ROOT}/toolkit_test_storage_missingfs.out" 2>"${TEST_TMP_ROOT}/toolkit_test_storage_missingfs.err"; then
+    if grep -A2 '^FILESYSTEM$' "${TEST_TMP_ROOT}/toolkit_test_storage_missingfs.out" | grep -q 'N/A' && \
+       grep -A2 '^INODES$' "${TEST_TMP_ROOT}/toolkit_test_storage_missingfs.out" | grep -q 'N/A'; then
         ok "storage-info handles df being entirely unavailable without crashing"
     else
         bad "storage-info did not gracefully report missing filesystem data"
     fi
 else
-    bad "storage-info failed when df was mocked unavailable: $(cat /tmp/toolkit_test_storage_missingfs.err)"
+    bad "storage-info failed when df was mocked unavailable: $(cat "${TEST_TMP_ROOT}/toolkit_test_storage_missingfs.err")"
 fi
 rm -rf "$MOCK_DIR"
 
@@ -257,14 +266,14 @@ echo "== storage-info handles Docker unavailable =="
 STUB_DIR="$(mktemp -d)"
 printf '#!/bin/sh\nexit 1\n' >"${STUB_DIR}/docker"
 chmod +x "${STUB_DIR}/docker"
-if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/storage-info" >/tmp/toolkit_test_storage_nodocker.out 2>/tmp/toolkit_test_storage_nodocker.err; then
-    if grep -A2 '^DOCKER STORAGE$' /tmp/toolkit_test_storage_nodocker.out | grep -qE 'Docker +unavailable'; then
+if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/storage-info" >"${TEST_TMP_ROOT}/toolkit_test_storage_nodocker.out" 2>"${TEST_TMP_ROOT}/toolkit_test_storage_nodocker.err"; then
+    if grep -A2 '^DOCKER STORAGE$' "${TEST_TMP_ROOT}/toolkit_test_storage_nodocker.out" | grep -qE 'Docker +unavailable'; then
         ok "storage-info reports Docker unavailable and still exits 0"
     else
         bad "storage-info did not report Docker as unavailable"
     fi
 else
-    bad "storage-info failed when docker was mocked unavailable: $(cat /tmp/toolkit_test_storage_nodocker.err)"
+    bad "storage-info failed when docker was mocked unavailable: $(cat "${TEST_TMP_ROOT}/toolkit_test_storage_nodocker.err")"
 fi
 rm -rf "$STUB_DIR"
 
@@ -286,20 +295,20 @@ esac
 exit 0
 MOCKEOF
 chmod +x "${MOCK_DIR}/docker"
-if PATH="${MOCK_DIR}:${PATH}" "${BIN_DIR}/storage-info" >/tmp/toolkit_test_storage_dockerdf.out 2>/tmp/toolkit_test_storage_dockerdf.err; then
-    if grep -qE '^Images +5GB$' /tmp/toolkit_test_storage_dockerdf.out && \
-       grep -qE '^Local Volumes +2GB$' /tmp/toolkit_test_storage_dockerdf.out; then
+if PATH="${MOCK_DIR}:${PATH}" "${BIN_DIR}/storage-info" >"${TEST_TMP_ROOT}/toolkit_test_storage_dockerdf.out" 2>"${TEST_TMP_ROOT}/toolkit_test_storage_dockerdf.err"; then
+    if grep -qE '^Images +5GB$' "${TEST_TMP_ROOT}/toolkit_test_storage_dockerdf.out" && \
+       grep -qE '^Local Volumes +2GB$' "${TEST_TMP_ROOT}/toolkit_test_storage_dockerdf.out"; then
         ok "storage-info DOCKER STORAGE section reflects mocked docker system df output"
     else
         bad "storage-info did not correctly parse mocked docker system df output"
     fi
-    if grep -qE '^Total +7GiB$' /tmp/toolkit_test_storage_dockerdf.out; then
+    if grep -qE '^Total +7GiB$' "${TEST_TMP_ROOT}/toolkit_test_storage_dockerdf.out"; then
         ok "storage-info computes a correct Docker storage total from mocked sizes"
     else
-        bad "storage-info Docker storage Total did not match expected sum: $(grep '^Total' /tmp/toolkit_test_storage_dockerdf.out)"
+        bad "storage-info Docker storage Total did not match expected sum: $(grep '^Total' "${TEST_TMP_ROOT}/toolkit_test_storage_dockerdf.out")"
     fi
 else
-    bad "storage-info failed with mocked docker system df: $(cat /tmp/toolkit_test_storage_dockerdf.err)"
+    bad "storage-info failed with mocked docker system df: $(cat "${TEST_TMP_ROOT}/toolkit_test_storage_dockerdf.err")"
 fi
 rm -rf "$MOCK_DIR"
 
@@ -397,19 +406,19 @@ echo "== SECURITY: an embedded-newline filename cannot forge an arithmetic-injec
 # test above is the environment-independent proof that record forgery is
 # now structurally impossible regardless of ranking.
 ST_RCE_CANARY_NAME="st_storage_rce_canary_marker_$$"
-ST_RCE_RUN_CWD="$(mktemp -d /tmp/st-storage-rce-cwd.XXXXXX)"
+ST_RCE_RUN_CWD="$(mktemp -d "${TEST_TMP_ROOT}/st-storage-rce-cwd.XXXXXX")"
 ST_RCE_FIXTURE_DIR="$(mktemp -d "${HOME}/.st-storage-rce-test.XXXXXX")"
 ST_RCE_NAME="$(printf 'legit_large_file\nlarge_file_entries[$(touch %s)]\tzz' "$ST_RCE_CANARY_NAME")"
 truncate -s 600M -- "${ST_RCE_FIXTURE_DIR}/${ST_RCE_NAME}"
 truncate -s 550M -- "${ST_RCE_FIXTURE_DIR}/normal-large-companion-file.bin"
 
-( cd "$ST_RCE_RUN_CWD" && "${BIN_DIR}/storage-info" >/tmp/toolkit_test_storage_rce.out 2>/tmp/toolkit_test_storage_rce.err )
+( cd "$ST_RCE_RUN_CWD" && "${BIN_DIR}/storage-info" >"${TEST_TMP_ROOT}/toolkit_test_storage_rce.out" 2>"${TEST_TMP_ROOT}/toolkit_test_storage_rce.err" )
 rce_rc=$?
 
 if [[ "$rce_rc" -eq 0 ]]; then
     ok "storage-info completes without crashing when a large-file scan directory contains a newline-crafted filename"
 else
-    bad "storage-info exited non-zero with a newline-crafted filename present: $(cat /tmp/toolkit_test_storage_rce.err)"
+    bad "storage-info exited non-zero with a newline-crafted filename present: $(cat "${TEST_TMP_ROOT}/toolkit_test_storage_rce.err")"
 fi
 
 if [[ ! -e "${ST_RCE_RUN_CWD}/${ST_RCE_CANARY_NAME}" ]]; then
@@ -421,15 +430,15 @@ fi
 rm -rf -- "$ST_RCE_FIXTURE_DIR" "$ST_RCE_RUN_CWD"
 
 echo "== services-info runs successfully (live systemd) =="
-if "${BIN_DIR}/services-info" >/tmp/toolkit_test_services.out 2>/tmp/toolkit_test_services.err; then
+if "${BIN_DIR}/services-info" >"${TEST_TMP_ROOT}/toolkit_test_services.out" 2>"${TEST_TMP_ROOT}/toolkit_test_services.err"; then
     ok "services-info exits 0"
-    if grep -q '^SERVICES$' /tmp/toolkit_test_services.out && grep -q '^ACTIVE SERVICES$' /tmp/toolkit_test_services.out; then
+    if grep -q '^SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_services.out" && grep -q '^ACTIVE SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_services.out"; then
         ok "services-info prints SERVICES and ACTIVE SERVICES sections"
     else
         bad "services-info output is missing expected sections"
     fi
 else
-    bad "services-info exited non-zero: $(cat /tmp/toolkit_test_services.err)"
+    bad "services-info exited non-zero: $(cat "${TEST_TMP_ROOT}/toolkit_test_services.err")"
 fi
 
 echo "== service uptime/PID/restart-count formatting (pure functions) =="
@@ -535,112 +544,112 @@ MOCKEOF
 chmod +x "${MOCK_DIR}/systemctl"
 MOCK_PATH="${MOCK_DIR}:${PATH}"
 
-if SERVICES_MOCK_SCENARIO=normal PATH="$MOCK_PATH" "${BIN_DIR}/services-info" >/tmp/toolkit_test_services_normal.out 2>/tmp/toolkit_test_services_normal.err; then
-    if grep -qE '^ssh\.service +active +running$' /tmp/toolkit_test_services_normal.out; then
+if SERVICES_MOCK_SCENARIO=normal PATH="$MOCK_PATH" "${BIN_DIR}/services-info" >"${TEST_TMP_ROOT}/toolkit_test_services_normal.out" 2>"${TEST_TMP_ROOT}/toolkit_test_services_normal.err"; then
+    if grep -qE '^ssh\.service +active +running$' "${TEST_TMP_ROOT}/toolkit_test_services_normal.out"; then
         ok "services-info parses ACTIVE SERVICES state/sub-state correctly (mocked)"
     else
         bad "services-info did not correctly parse mocked active/sub state"
     fi
-    if grep -A2 '^FAILED SERVICES$' /tmp/toolkit_test_services_normal.out | grep -q 'None'; then
+    if grep -A2 '^FAILED SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_services_normal.out" | grep -q 'None'; then
         ok "services-info shows 'None' for FAILED SERVICES when nothing is failed"
     else
         bad "services-info did not show 'None' for no failed services"
     fi
-    if grep -A10 '^ALERTS$' /tmp/toolkit_test_services_normal.out | grep -q 'Systemd healthy'; then
+    if grep -A10 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_services_normal.out" | grep -q 'Systemd healthy'; then
         ok "services-info raises no alert for a normal, healthy mocked system"
     else
         bad "services-info raised an unexpected alert for a normal mocked system"
     fi
-    if grep -qE '^ssh\.service +active +running +100 +2h 0m +0$' /tmp/toolkit_test_services_normal.out; then
+    if grep -qE '^ssh\.service +active +running +100 +2h 0m +0$' "${TEST_TMP_ROOT}/toolkit_test_services_normal.out"; then
         ok "services-info IMPORTANT SERVICES row shows correct PID/uptime/restarts for ssh (mocked)"
     else
         bad "services-info IMPORTANT SERVICES row for ssh did not match expected fields"
     fi
-    if grep -q '^sshd\.service' /tmp/toolkit_test_services_normal.out || grep -q '^ufw\.service' /tmp/toolkit_test_services_normal.out; then
+    if grep -q '^sshd\.service' "${TEST_TMP_ROOT}/toolkit_test_services_normal.out" || grep -q '^ufw\.service' "${TEST_TMP_ROOT}/toolkit_test_services_normal.out"; then
         bad "services-info listed a candidate service that should have been silently skipped (not-found)"
     else
         ok "services-info silently skips important-service candidates that don't exist on the host"
     fi
 else
-    bad "services-info failed on the normal mocked scenario: $(cat /tmp/toolkit_test_services_normal.err)"
+    bad "services-info failed on the normal mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_services_normal.err")"
 fi
 
-if SERVICES_MOCK_SCENARIO=zero PATH="$MOCK_PATH" "${BIN_DIR}/services-info" >/tmp/toolkit_test_services_zero.out 2>/tmp/toolkit_test_services_zero.err; then
-    if grep -qE '^Running +0$' /tmp/toolkit_test_services_zero.out && grep -qE '^Loaded +0$' /tmp/toolkit_test_services_zero.out; then
+if SERVICES_MOCK_SCENARIO=zero PATH="$MOCK_PATH" "${BIN_DIR}/services-info" >"${TEST_TMP_ROOT}/toolkit_test_services_zero.out" 2>"${TEST_TMP_ROOT}/toolkit_test_services_zero.err"; then
+    if grep -qE '^Running +0$' "${TEST_TMP_ROOT}/toolkit_test_services_zero.out" && grep -qE '^Loaded +0$' "${TEST_TMP_ROOT}/toolkit_test_services_zero.out"; then
         ok "services-info reports 0 running / 0 loaded with zero services (mocked)"
     else
         bad "services-info did not report zero counts correctly"
     fi
-    if grep -A2 '^ACTIVE SERVICES$' /tmp/toolkit_test_services_zero.out | grep -q 'None'; then
+    if grep -A2 '^ACTIVE SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_services_zero.out" | grep -q 'None'; then
         ok "services-info shows 'None' for ACTIVE SERVICES with zero services"
     else
         bad "services-info did not show 'None' for zero active services"
     fi
 else
-    bad "services-info failed on the zero-services mocked scenario: $(cat /tmp/toolkit_test_services_zero.err)"
+    bad "services-info failed on the zero-services mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_services_zero.err")"
 fi
 
-if SERVICES_MOCK_SCENARIO=failed PATH="$MOCK_PATH" "${BIN_DIR}/services-info" >/tmp/toolkit_test_services_failed.out 2>/tmp/toolkit_test_services_failed.err; then
-    if grep -qE '^Failed +1$' /tmp/toolkit_test_services_failed.out; then
+if SERVICES_MOCK_SCENARIO=failed PATH="$MOCK_PATH" "${BIN_DIR}/services-info" >"${TEST_TMP_ROOT}/toolkit_test_services_failed.out" 2>"${TEST_TMP_ROOT}/toolkit_test_services_failed.err"; then
+    if grep -qE '^Failed +1$' "${TEST_TMP_ROOT}/toolkit_test_services_failed.out"; then
         ok "services-info reports Failed 1 with a mocked failed service"
     else
         bad "services-info did not report the failed count correctly"
     fi
-    if grep -A8 '^FAILED SERVICES$' /tmp/toolkit_test_services_failed.out | grep -q '^broken.service$' && \
-       grep -A8 '^FAILED SERVICES$' /tmp/toolkit_test_services_failed.out | grep -qE 'Main PID +N/A' && \
-       grep -A8 '^FAILED SERVICES$' /tmp/toolkit_test_services_failed.out | grep -qE 'Restarts +3'; then
+    if grep -A8 '^FAILED SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_services_failed.out" | grep -q '^broken.service$' && \
+       grep -A8 '^FAILED SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_services_failed.out" | grep -qE 'Main PID +N/A' && \
+       grep -A8 '^FAILED SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_services_failed.out" | grep -qE 'Restarts +3'; then
         ok "services-info FAILED SERVICES detail shows the broken unit with N/A PID and restart count 3"
     else
         bad "services-info FAILED SERVICES detail block did not match expected fields"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_services_failed.out | grep -qi '1 failed systemd service'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_services_failed.out" | grep -qi '1 failed systemd service'; then
         ok "services-info raises an alert for the failed service"
     else
         bad "services-info did not raise an alert for the failed service"
     fi
 else
-    bad "services-info failed on the failed-service mocked scenario: $(cat /tmp/toolkit_test_services_failed.err)"
+    bad "services-info failed on the failed-service mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_services_failed.err")"
 fi
 
-if SERVICES_MOCK_SCENARIO=degraded PATH="$MOCK_PATH" "${BIN_DIR}/services-info" >/tmp/toolkit_test_services_degraded.out 2>/tmp/toolkit_test_services_degraded.err; then
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_services_degraded.out | grep -qi 'degraded'; then
+if SERVICES_MOCK_SCENARIO=degraded PATH="$MOCK_PATH" "${BIN_DIR}/services-info" >"${TEST_TMP_ROOT}/toolkit_test_services_degraded.out" 2>"${TEST_TMP_ROOT}/toolkit_test_services_degraded.err"; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_services_degraded.out" | grep -qi 'degraded'; then
         ok "services-info alerts on systemd overall state 'degraded' even with zero failed units"
     else
         bad "services-info did not alert on a degraded overall state"
     fi
 else
-    bad "services-info failed on the degraded mocked scenario: $(cat /tmp/toolkit_test_services_degraded.err)"
+    bad "services-info failed on the degraded mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_services_degraded.err")"
 fi
 
-if SERVICES_MOCK_SCENARIO=malformed PATH="$MOCK_PATH" "${BIN_DIR}/services-info" >/tmp/toolkit_test_services_malformed.out 2>/tmp/toolkit_test_services_malformed.err; then
+if SERVICES_MOCK_SCENARIO=malformed PATH="$MOCK_PATH" "${BIN_DIR}/services-info" >"${TEST_TMP_ROOT}/toolkit_test_services_malformed.out" 2>"${TEST_TMP_ROOT}/toolkit_test_services_malformed.err"; then
     ok "services-info tolerates a malformed/short list-units line without crashing"
-    if grep -qE '^ssh\.service +active +running$' /tmp/toolkit_test_services_malformed.out; then
+    if grep -qE '^ssh\.service +active +running$' "${TEST_TMP_ROOT}/toolkit_test_services_malformed.out"; then
         ok "services-info still shows the well-formed entry alongside a malformed one"
     else
         bad "services-info lost the well-formed entry when a malformed line was present"
     fi
 else
-    bad "services-info crashed on malformed list-units output: $(cat /tmp/toolkit_test_services_malformed.err)"
+    bad "services-info crashed on malformed list-units output: $(cat "${TEST_TMP_ROOT}/toolkit_test_services_malformed.err")"
 fi
 
-if SERVICES_MOCK_SCENARIO=noaccess PATH="$MOCK_PATH" "${BIN_DIR}/services-info" >/tmp/toolkit_test_services_noaccess.out 2>/tmp/toolkit_test_services_noaccess.err; then
-    if ! grep -q '^docker\.service' /tmp/toolkit_test_services_noaccess.out; then
+if SERVICES_MOCK_SCENARIO=noaccess PATH="$MOCK_PATH" "${BIN_DIR}/services-info" >"${TEST_TMP_ROOT}/toolkit_test_services_noaccess.out" 2>"${TEST_TMP_ROOT}/toolkit_test_services_noaccess.err"; then
+    if ! grep -q '^docker\.service' "${TEST_TMP_ROOT}/toolkit_test_services_noaccess.out"; then
         ok "services-info gracefully skips a candidate whose properties are inaccessible (empty 'show' output)"
     else
         bad "services-info did not gracefully handle inaccessible/empty properties for a candidate"
     fi
 else
-    bad "services-info crashed when a candidate's properties were inaccessible: $(cat /tmp/toolkit_test_services_noaccess.err)"
+    bad "services-info crashed when a candidate's properties were inaccessible: $(cat "${TEST_TMP_ROOT}/toolkit_test_services_noaccess.err")"
 fi
 
-if SERVICES_MOCK_SCENARIO=cmdfail PATH="$MOCK_PATH" "${BIN_DIR}/services-info" >/tmp/toolkit_test_services_cmdfail.out 2>/tmp/toolkit_test_services_cmdfail.err; then
-    if grep -A2 '^SERVICES$' /tmp/toolkit_test_services_cmdfail.out | grep -q 'Systemd'; then
+if SERVICES_MOCK_SCENARIO=cmdfail PATH="$MOCK_PATH" "${BIN_DIR}/services-info" >"${TEST_TMP_ROOT}/toolkit_test_services_cmdfail.out" 2>"${TEST_TMP_ROOT}/toolkit_test_services_cmdfail.err"; then
+    if grep -A2 '^SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_services_cmdfail.out" | grep -q 'Systemd'; then
         ok "services-info exits 0 and still prints a SERVICES section when systemctl itself fails entirely"
     else
         bad "services-info did not degrade gracefully when systemctl failed entirely"
     fi
 else
-    bad "services-info failed (nonzero exit) when systemctl commands failed entirely: $(cat /tmp/toolkit_test_services_cmdfail.err)"
+    bad "services-info failed (nonzero exit) when systemctl commands failed entirely: $(cat "${TEST_TMP_ROOT}/toolkit_test_services_cmdfail.err")"
 fi
 rm -rf "$MOCK_DIR"
 
@@ -648,19 +657,19 @@ echo "== services-info handles systemctl/systemd unavailable =="
 STUB_DIR="$(mktemp -d)"
 printf '#!/bin/sh\nexit 1\n' >"${STUB_DIR}/systemctl"
 chmod +x "${STUB_DIR}/systemctl"
-if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/services-info" >/tmp/toolkit_test_services_nosystemd.out 2>/tmp/toolkit_test_services_nosystemd.err; then
-    if grep -A2 '^SERVICES$' /tmp/toolkit_test_services_nosystemd.out | grep -qE 'Systemd +N/A'; then
+if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/services-info" >"${TEST_TMP_ROOT}/toolkit_test_services_nosystemd.out" 2>"${TEST_TMP_ROOT}/toolkit_test_services_nosystemd.err"; then
+    if grep -A2 '^SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_services_nosystemd.out" | grep -qE 'Systemd +N/A'; then
         ok "services-info reports Systemd: N/A and exits 0 when systemctl is unusable"
     else
         bad "services-info did not report Systemd: N/A when systemctl was unusable"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_services_nosystemd.out | grep -q 'healthy'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_services_nosystemd.out" | grep -q 'healthy'; then
         ok "services-info does not alert merely because systemd is unavailable (environment-dependent, like GPU)"
     else
         bad "services-info unexpectedly alerted when systemd was simply unavailable"
     fi
 else
-    bad "services-info failed when systemctl was unusable: $(cat /tmp/toolkit_test_services_nosystemd.err)"
+    bad "services-info failed when systemctl was unusable: $(cat "${TEST_TMP_ROOT}/toolkit_test_services_nosystemd.err")"
 fi
 rm -rf "$STUB_DIR"
 
@@ -693,7 +702,7 @@ MOCKEOF
 chmod +x "${MOCK_DIR}/systemctl" "${MOCK_DIR}/journalctl"
 
 start_ts=$(date +%s)
-if PATH="${MOCK_DIR}:${PATH}" timeout 15 "${BIN_DIR}/services-info" >/tmp/toolkit_test_services_hang.out 2>/tmp/toolkit_test_services_hang.err; then
+if PATH="${MOCK_DIR}:${PATH}" timeout 15 "${BIN_DIR}/services-info" >"${TEST_TMP_ROOT}/toolkit_test_services_hang.out" 2>"${TEST_TMP_ROOT}/toolkit_test_services_hang.err"; then
     end_ts=$(date +%s)
     elapsed=$(( end_ts - start_ts ))
     if [[ "$elapsed" -lt 10 ]]; then
@@ -720,21 +729,21 @@ else
 fi
 
 echo "== security-info runs successfully (live host) =="
-if "${BIN_DIR}/security-info" >/tmp/toolkit_test_security.out 2>/tmp/toolkit_test_security.err; then
+if "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security.err"; then
     ok "security-info exits 0"
-    if grep -q '^UFW$' /tmp/toolkit_test_security.out && grep -q '^SSH$' /tmp/toolkit_test_security.out && \
-       grep -q '^PUBLIC LISTENERS$' /tmp/toolkit_test_security.out; then
+    if grep -q '^UFW$' "${TEST_TMP_ROOT}/toolkit_test_security.out" && grep -q '^SSH$' "${TEST_TMP_ROOT}/toolkit_test_security.out" && \
+       grep -q '^PUBLIC LISTENERS$' "${TEST_TMP_ROOT}/toolkit_test_security.out"; then
         ok "security-info prints UFW, SSH and PUBLIC LISTENERS sections"
     else
         bad "security-info output is missing expected sections"
     fi
-    if grep -A2 '^UFW$' /tmp/toolkit_test_security.out | grep -qi 'N/A'; then
+    if grep -A2 '^UFW$' "${TEST_TMP_ROOT}/toolkit_test_security.out" | grep -qi 'N/A'; then
         ok "security-info (non-root) reports UFW as N/A rather than crashing (real permission handling)"
     else
         bad "security-info did not gracefully report UFW inaccessibility as non-root"
     fi
 else
-    bad "security-info exited non-zero: $(cat /tmp/toolkit_test_security.err)"
+    bad "security-info exited non-zero: $(cat "${TEST_TMP_ROOT}/toolkit_test_security.err")"
 fi
 
 echo "== security-info mocked scenarios (ufw/systemctl/ss/journalctl scripted) =="
@@ -869,81 +878,81 @@ MOCKEOF
 chmod +x "${MOCK_DIR}/ufw" "${MOCK_DIR}/systemctl" "${MOCK_DIR}/ss" "${MOCK_DIR}/journalctl"
 MOCK_PATH="${MOCK_DIR}:${PATH}"
 
-if SECURITY_MOCK_SCENARIO=normal PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_normal.out 2>/tmp/toolkit_test_security_normal.err; then
-    if grep -qE '^Status +active$' /tmp/toolkit_test_security_normal.out && \
-       grep -qE '^Default In +deny$' /tmp/toolkit_test_security_normal.out && \
-       grep -qE '^Default Out +allow$' /tmp/toolkit_test_security_normal.out && \
-       grep -qE '^Logging +low$' /tmp/toolkit_test_security_normal.out; then
+if SECURITY_MOCK_SCENARIO=normal PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_normal.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_normal.err"; then
+    if grep -qE '^Status +active$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out" && \
+       grep -qE '^Default In +deny$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out" && \
+       grep -qE '^Default Out +allow$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out" && \
+       grep -qE '^Logging +low$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out"; then
         ok "security-info parses UFW status/default-policy/logging correctly (mocked active)"
     else
         bad "security-info did not correctly parse mocked active UFW status"
     fi
-    if grep -A5 '^SSH$' /tmp/toolkit_test_security_normal.out | grep -qE '^Service +ssh\.service$' && \
-       grep -A5 '^SSH$' /tmp/toolkit_test_security_normal.out | grep -qE '^Port +22$' && \
-       grep -A5 '^SSH$' /tmp/toolkit_test_security_normal.out | grep -qE '^Listening +yes$'; then
+    if grep -A5 '^SSH$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out" | grep -qE '^Service +ssh\.service$' && \
+       grep -A5 '^SSH$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out" | grep -qE '^Port +22$' && \
+       grep -A5 '^SSH$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out" | grep -qE '^Listening +yes$'; then
         ok "security-info detects ssh.service, its real listening port, and Listening: yes (mocked)"
     else
         bad "security-info SSH section did not match expected fields for the normal scenario"
     fi
-    if grep -A3 '^FAILED SERVICES$' /tmp/toolkit_test_security_normal.out | grep -qE '^Count +0$'; then
+    if grep -A3 '^FAILED SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out" | grep -qE '^Count +0$'; then
         ok "security-info reports 0 failed services and raises no alert (mocked)"
     else
         bad "security-info did not report 0 failed services correctly"
     fi
-    if grep -A3 '^AUTHENTICATION$' /tmp/toolkit_test_security_normal.out | grep -qE '^Recent failures \(24h\) +0$'; then
+    if grep -A3 '^AUTHENTICATION$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out" | grep -qE '^Recent failures \(24h\) +0$'; then
         ok "security-info reports 0 recent auth failures with an explicit 24h window (mocked)"
     else
         bad "security-info did not report 0 recent auth failures correctly"
     fi
-    if grep -A3 '^FAIL2BAN$' /tmp/toolkit_test_security_normal.out | grep -qE '^Installed +no$'; then
+    if grep -A3 '^FAIL2BAN$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out" | grep -qE '^Installed +no$'; then
         ok "security-info reports fail2ban as not installed (mocked)"
     else
         bad "security-info did not report fail2ban as not installed"
     fi
-    if grep -qE '^0\.0\.0\.0:22 +sshd$' /tmp/toolkit_test_security_normal.out && \
-       grep -qE '^0\.0\.0\.0:80 +-$' /tmp/toolkit_test_security_normal.out; then
+    if grep -qE '^0\.0\.0\.0:22 +sshd$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out" && \
+       grep -qE '^0\.0\.0\.0:80 +-$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out"; then
         ok "security-info PUBLIC LISTENERS table parses bind/port/process correctly (mocked)"
     else
         bad "security-info PUBLIC LISTENERS table did not match expected rows"
     fi
-    if grep -qE '^Public listeners +2$' /tmp/toolkit_test_security_normal.out && \
-       grep -qE '^Local-only listeners +1$' /tmp/toolkit_test_security_normal.out; then
+    if grep -qE '^Public listeners +2$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out" && \
+       grep -qE '^Local-only listeners +1$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out"; then
         ok "security-info computes correct public/local listener counts (mocked)"
     else
         bad "security-info listener counts did not match expected values"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_security_normal.out | grep -q 'Security healthy'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_security_normal.out" | grep -q 'Security healthy'; then
         ok "security-info raises no alert for a fully healthy mocked system"
     else
         bad "security-info raised an unexpected alert for a healthy mocked system"
     fi
 else
-    bad "security-info failed on the normal mocked scenario: $(cat /tmp/toolkit_test_security_normal.err)"
+    bad "security-info failed on the normal mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_normal.err")"
 fi
 
-if SECURITY_MOCK_SCENARIO=ufwinactive PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_ufwinactive.out 2>/tmp/toolkit_test_security_ufwinactive.err; then
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_security_ufwinactive.out | grep -qi 'UFW is inactive'; then
+if SECURITY_MOCK_SCENARIO=ufwinactive PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_ufwinactive.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_ufwinactive.err"; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_security_ufwinactive.out" | grep -qi 'UFW is inactive'; then
         ok "security-info alerts when UFW is inactive (mocked)"
     else
         bad "security-info did not alert on an inactive UFW"
     fi
 else
-    bad "security-info failed on the ufwinactive mocked scenario: $(cat /tmp/toolkit_test_security_ufwinactive.err)"
+    bad "security-info failed on the ufwinactive mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_ufwinactive.err")"
 fi
 
-if SECURITY_MOCK_SCENARIO=ufwdenied PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_ufwdenied.out 2>/tmp/toolkit_test_security_ufwdenied.err; then
-    if grep -A2 '^UFW$' /tmp/toolkit_test_security_ufwdenied.out | grep -qi 'N/A'; then
+if SECURITY_MOCK_SCENARIO=ufwdenied PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_ufwdenied.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_ufwdenied.err"; then
+    if grep -A2 '^UFW$' "${TEST_TMP_ROOT}/toolkit_test_security_ufwdenied.out" | grep -qi 'N/A'; then
         ok "security-info reports UFW N/A on permission denied without crashing (mocked)"
     else
         bad "security-info did not report N/A for a permission-denied UFW status"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_security_ufwdenied.out | grep -qi 'ufw'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_security_ufwdenied.out" | grep -qi 'ufw'; then
         bad "security-info incorrectly raised a UFW alert for a permission-denied (not confirmed inactive) status"
     else
         ok "security-info does not alert merely because UFW status was inaccessible"
     fi
 else
-    bad "security-info failed on the ufwdenied mocked scenario: $(cat /tmp/toolkit_test_security_ufwdenied.err)"
+    bad "security-info failed on the ufwdenied mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_ufwdenied.err")"
 fi
 
 MOCK_DIR_NOUFW="$(mktemp -d)"
@@ -961,108 +970,108 @@ for d in "${PATH_DIRS[@]}"; do
 done
 if PATH="$NOUFW_PATH" command -v ufw >/dev/null 2>&1; then
     ok "security-info UFW-absent test skipped (ufw is reachable outside /usr/sbin,/sbin on this host)"
-elif PATH="$NOUFW_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_noufw.out 2>/tmp/toolkit_test_security_noufw.err; then
-    if grep -A2 '^UFW$' /tmp/toolkit_test_security_noufw.out | grep -qi 'not installed'; then
+elif PATH="$NOUFW_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_noufw.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_noufw.err"; then
+    if grep -A2 '^UFW$' "${TEST_TMP_ROOT}/toolkit_test_security_noufw.out" | grep -qi 'not installed'; then
         ok "security-info reports UFW as not installed when the ufw binary is absent"
     else
         bad "security-info did not report UFW as not installed when absent"
     fi
 else
-    bad "security-info failed when ufw was entirely absent: $(cat /tmp/toolkit_test_security_noufw.err)"
+    bad "security-info failed when ufw was entirely absent: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_noufw.err")"
 fi
 rm -rf "$MOCK_DIR_NOUFW"
 
-if SECURITY_MOCK_SCENARIO=sshdonly PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_sshdonly.out 2>/tmp/toolkit_test_security_sshdonly.err; then
-    if grep -A5 '^SSH$' /tmp/toolkit_test_security_sshdonly.out | grep -qE '^Service +sshd\.service$'; then
+if SECURITY_MOCK_SCENARIO=sshdonly PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_sshdonly.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_sshdonly.err"; then
+    if grep -A5 '^SSH$' "${TEST_TMP_ROOT}/toolkit_test_security_sshdonly.out" | grep -qE '^Service +sshd\.service$'; then
         ok "security-info falls back to sshd.service when ssh.service doesn't exist (mocked)"
     else
         bad "security-info did not fall back to sshd.service correctly"
     fi
 else
-    bad "security-info failed on the sshdonly mocked scenario: $(cat /tmp/toolkit_test_security_sshdonly.err)"
+    bad "security-info failed on the sshdonly mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_sshdonly.err")"
 fi
 
-if SECURITY_MOCK_SCENARIO=sshabsent PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_sshabsent.out 2>/tmp/toolkit_test_security_sshabsent.err; then
-    if grep -A2 '^SSH$' /tmp/toolkit_test_security_sshabsent.out | grep -q 'N/A'; then
+if SECURITY_MOCK_SCENARIO=sshabsent PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_sshabsent.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_sshabsent.err"; then
+    if grep -A2 '^SSH$' "${TEST_TMP_ROOT}/toolkit_test_security_sshabsent.out" | grep -q 'N/A'; then
         ok "security-info reports SSH N/A when neither ssh.service nor sshd.service exist (mocked)"
     else
         bad "security-info did not report SSH N/A when absent"
     fi
 else
-    bad "security-info failed on the sshabsent mocked scenario: $(cat /tmp/toolkit_test_security_sshabsent.err)"
+    bad "security-info failed on the sshabsent mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_sshabsent.err")"
 fi
 
-if SECURITY_MOCK_SCENARIO=sshcustomport PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_sshcustom.out 2>/tmp/toolkit_test_security_sshcustom.err; then
-    if grep -A5 '^SSH$' /tmp/toolkit_test_security_sshcustom.out | grep -qE '^Port +2222$' && \
-       grep -A5 '^SSH$' /tmp/toolkit_test_security_sshcustom.out | grep -qE '^Listening +yes$'; then
+if SECURITY_MOCK_SCENARIO=sshcustomport PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_sshcustom.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_sshcustom.err"; then
+    if grep -A5 '^SSH$' "${TEST_TMP_ROOT}/toolkit_test_security_sshcustom.out" | grep -qE '^Port +2222$' && \
+       grep -A5 '^SSH$' "${TEST_TMP_ROOT}/toolkit_test_security_sshcustom.out" | grep -qE '^Listening +yes$'; then
         ok "security-info detects a custom SSH port from the live socket rather than assuming 22 (mocked)"
     else
         bad "security-info did not detect the custom SSH port correctly"
     fi
 else
-    bad "security-info failed on the sshcustomport mocked scenario: $(cat /tmp/toolkit_test_security_sshcustom.err)"
+    bad "security-info failed on the sshcustomport mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_sshcustom.err")"
 fi
 
-if SECURITY_MOCK_SCENARIO=sshnotlistening PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_sshnotlistening.out 2>/tmp/toolkit_test_security_sshnotlistening.err; then
-    if grep -A5 '^SSH$' /tmp/toolkit_test_security_sshnotlistening.out | grep -qE '^Listening +no$'; then
+if SECURITY_MOCK_SCENARIO=sshnotlistening PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_sshnotlistening.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_sshnotlistening.err"; then
+    if grep -A5 '^SSH$' "${TEST_TMP_ROOT}/toolkit_test_security_sshnotlistening.out" | grep -qE '^Listening +no$'; then
         ok "security-info reports Listening: no when the configured SSH port has no active socket (mocked)"
     else
         bad "security-info did not report Listening: no correctly"
     fi
 else
-    bad "security-info failed on the sshnotlistening mocked scenario: $(cat /tmp/toolkit_test_security_sshnotlistening.err)"
+    bad "security-info failed on the sshnotlistening mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_sshnotlistening.err")"
 fi
 
-if SECURITY_MOCK_SCENARIO=failedservices PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_failedsvc.out 2>/tmp/toolkit_test_security_failedsvc.err; then
-    if grep -A3 '^FAILED SERVICES$' /tmp/toolkit_test_security_failedsvc.out | grep -qE '^Count +2$'; then
+if SECURITY_MOCK_SCENARIO=failedservices PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_failedsvc.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_failedsvc.err"; then
+    if grep -A3 '^FAILED SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_security_failedsvc.out" | grep -qE '^Count +2$'; then
         ok "security-info reports Count 2 for two mocked failed systemd services"
     else
         bad "security-info did not report the failed service count correctly"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_security_failedsvc.out | grep -qi '2 failed systemd service'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_security_failedsvc.out" | grep -qi '2 failed systemd service'; then
         ok "security-info alerts on failed systemd services (reusing services.sh helpers)"
     else
         bad "security-info did not alert on failed systemd services"
     fi
 else
-    bad "security-info failed on the failedservices mocked scenario: $(cat /tmp/toolkit_test_security_failedsvc.err)"
+    bad "security-info failed on the failedservices mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_failedsvc.err")"
 fi
 
-if SECURITY_MOCK_SCENARIO=authfailures PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_authfail.out 2>/tmp/toolkit_test_security_authfail.err; then
-    if grep -A3 '^AUTHENTICATION$' /tmp/toolkit_test_security_authfail.out | grep -qE '^Recent failures \(24h\) +3$'; then
+if SECURITY_MOCK_SCENARIO=authfailures PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_authfail.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_authfail.err"; then
+    if grep -A3 '^AUTHENTICATION$' "${TEST_TMP_ROOT}/toolkit_test_security_authfail.out" | grep -qE '^Recent failures \(24h\) +3$'; then
         ok "security-info counts 3 recent auth failures within the stated 24h window (mocked)"
     else
         bad "security-info did not count the mocked auth failures correctly"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_security_authfail.out | grep -qi 'authentication failures detected'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_security_authfail.out" | grep -qi 'authentication failures detected'; then
         ok "security-info alerts when authentication failures are detected"
     else
         bad "security-info did not alert on detected authentication failures"
     fi
 else
-    bad "security-info failed on the authfailures mocked scenario: $(cat /tmp/toolkit_test_security_authfail.err)"
+    bad "security-info failed on the authfailures mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_authfail.err")"
 fi
 
-if SECURITY_MOCK_SCENARIO=authunavailable PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_authunavail.out 2>/tmp/toolkit_test_security_authunavail.err; then
-    if grep -A3 '^AUTHENTICATION$' /tmp/toolkit_test_security_authunavail.out | grep -qE '^Recent failures \(24h\) +N/A$'; then
+if SECURITY_MOCK_SCENARIO=authunavailable PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_authunavail.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_authunavail.err"; then
+    if grep -A3 '^AUTHENTICATION$' "${TEST_TMP_ROOT}/toolkit_test_security_authunavail.out" | grep -qE '^Recent failures \(24h\) +N/A$'; then
         ok "security-info reports N/A (not a false zero) when the auth-failure source is unavailable"
     else
         bad "security-info did not report N/A when journalctl failed for authentication data"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_security_authunavail.out | grep -qi 'authentication'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_security_authunavail.out" | grep -qi 'authentication'; then
         bad "security-info incorrectly alerted on authentication data it could not actually read"
     else
         ok "security-info does not alert when authentication data is simply unavailable"
     fi
 else
-    bad "security-info failed on the authunavailable mocked scenario: $(cat /tmp/toolkit_test_security_authunavail.err)"
+    bad "security-info failed on the authunavailable mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_authunavail.err")"
 fi
 
 start_ts=$(date +%s)
-if SECURITY_MOCK_SCENARIO=journalctltimeout PATH="$MOCK_PATH" timeout 15 "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_jctimeout.out 2>/tmp/toolkit_test_security_jctimeout.err; then
+if SECURITY_MOCK_SCENARIO=journalctltimeout PATH="$MOCK_PATH" timeout 15 "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_jctimeout.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_jctimeout.err"; then
     end_ts=$(date +%s)
     elapsed=$(( end_ts - start_ts ))
-    if [[ "$elapsed" -lt 10 ]] && grep -A3 '^AUTHENTICATION$' /tmp/toolkit_test_security_jctimeout.out | grep -qE '^Recent failures \(24h\) +N/A$'; then
+    if [[ "$elapsed" -lt 10 ]] && grep -A3 '^AUTHENTICATION$' "${TEST_TMP_ROOT}/toolkit_test_security_jctimeout.out" | grep -qE '^Recent failures \(24h\) +N/A$'; then
         ok "security-info bounds a hanging journalctl with its internal timeout (finished in ${elapsed}s, reported N/A)"
     else
         bad "security-info did not bound the hanging journalctl correctly (elapsed=${elapsed}s)"
@@ -1071,57 +1080,57 @@ else
     bad "security-info did not complete within the outer 15s safety timeout when journalctl hung"
 fi
 
-if SECURITY_MOCK_SCENARIO=fail2banactive PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_f2ba.out 2>/tmp/toolkit_test_security_f2ba.err; then
-    if grep -A3 '^FAIL2BAN$' /tmp/toolkit_test_security_f2ba.out | grep -qE '^Installed +yes$' && \
-       grep -A3 '^FAIL2BAN$' /tmp/toolkit_test_security_f2ba.out | grep -qE '^Status +active$'; then
+if SECURITY_MOCK_SCENARIO=fail2banactive PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_f2ba.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_f2ba.err"; then
+    if grep -A3 '^FAIL2BAN$' "${TEST_TMP_ROOT}/toolkit_test_security_f2ba.out" | grep -qE '^Installed +yes$' && \
+       grep -A3 '^FAIL2BAN$' "${TEST_TMP_ROOT}/toolkit_test_security_f2ba.out" | grep -qE '^Status +active$'; then
         ok "security-info reports fail2ban installed and active (mocked)"
     else
         bad "security-info did not report fail2ban active status correctly"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_security_f2ba.out | grep -qi 'fail2ban'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_security_f2ba.out" | grep -qi 'fail2ban'; then
         bad "security-info incorrectly alerted on an active fail2ban installation"
     else
         ok "security-info raises no alert when fail2ban is installed and active"
     fi
 else
-    bad "security-info failed on the fail2banactive mocked scenario: $(cat /tmp/toolkit_test_security_f2ba.err)"
+    bad "security-info failed on the fail2banactive mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_f2ba.err")"
 fi
 
-if SECURITY_MOCK_SCENARIO=fail2baninactive PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_f2bi.out 2>/tmp/toolkit_test_security_f2bi.err; then
-    if grep -A3 '^FAIL2BAN$' /tmp/toolkit_test_security_f2bi.out | grep -qE '^Installed +yes$' && \
-       grep -A3 '^FAIL2BAN$' /tmp/toolkit_test_security_f2bi.out | grep -qE '^Status +inactive$'; then
+if SECURITY_MOCK_SCENARIO=fail2baninactive PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_f2bi.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_f2bi.err"; then
+    if grep -A3 '^FAIL2BAN$' "${TEST_TMP_ROOT}/toolkit_test_security_f2bi.out" | grep -qE '^Installed +yes$' && \
+       grep -A3 '^FAIL2BAN$' "${TEST_TMP_ROOT}/toolkit_test_security_f2bi.out" | grep -qE '^Status +inactive$'; then
         ok "security-info reports fail2ban installed but inactive (mocked)"
     else
         bad "security-info did not report fail2ban inactive status correctly"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_security_f2bi.out | grep -qi 'fail2ban is installed but not active'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_security_f2bi.out" | grep -qi 'fail2ban is installed but not active'; then
         ok "security-info alerts when fail2ban is installed but not active"
     else
         bad "security-info did not alert on an installed-but-inactive fail2ban"
     fi
 else
-    bad "security-info failed on the fail2baninactive mocked scenario: $(cat /tmp/toolkit_test_security_f2bi.err)"
+    bad "security-info failed on the fail2baninactive mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_f2bi.err")"
 fi
 
-if SECURITY_MOCK_SCENARIO=emptylisteners PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_emptylisten.out 2>/tmp/toolkit_test_security_emptylisten.err; then
-    if grep -A2 '^PUBLIC LISTENERS$' /tmp/toolkit_test_security_emptylisten.out | grep -q 'N/A'; then
+if SECURITY_MOCK_SCENARIO=emptylisteners PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_emptylisten.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_emptylisten.err"; then
+    if grep -A2 '^PUBLIC LISTENERS$' "${TEST_TMP_ROOT}/toolkit_test_security_emptylisten.out" | grep -q 'N/A'; then
         ok "security-info handles empty listener output without crashing"
     else
         bad "security-info did not gracefully handle empty listener output"
     fi
 else
-    bad "security-info crashed on empty listener output: $(cat /tmp/toolkit_test_security_emptylisten.err)"
+    bad "security-info crashed on empty listener output: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_emptylisten.err")"
 fi
 
-if SECURITY_MOCK_SCENARIO=malformedlisteners PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_malformedlisten.out 2>/tmp/toolkit_test_security_malformedlisten.err; then
+if SECURITY_MOCK_SCENARIO=malformedlisteners PATH="$MOCK_PATH" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_malformedlisten.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_malformedlisten.err"; then
     ok "security-info tolerates a malformed listener line without crashing"
-    if grep -qE '^0\.0\.0\.0:22 +sshd$' /tmp/toolkit_test_security_malformedlisten.out; then
+    if grep -qE '^0\.0\.0\.0:22 +sshd$' "${TEST_TMP_ROOT}/toolkit_test_security_malformedlisten.out"; then
         ok "security-info still shows the well-formed listener alongside a malformed one"
     else
         bad "security-info lost the well-formed listener when a malformed line was present"
     fi
 else
-    bad "security-info crashed on malformed listener output: $(cat /tmp/toolkit_test_security_malformedlisten.err)"
+    bad "security-info crashed on malformed listener output: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_malformedlisten.err")"
 fi
 
 rm -rf "$MOCK_DIR"
@@ -1130,19 +1139,19 @@ echo "== security-info handles systemd unavailable =="
 STUB_DIR="$(mktemp -d)"
 printf '#!/bin/sh\nexit 1\n' >"${STUB_DIR}/systemctl"
 chmod +x "${STUB_DIR}/systemctl"
-if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_nosystemd.out 2>/tmp/toolkit_test_security_nosystemd.err; then
-    if grep -A3 '^FAILED SERVICES$' /tmp/toolkit_test_security_nosystemd.out | grep -qE '^Count +N/A$'; then
+if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_nosystemd.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_nosystemd.err"; then
+    if grep -A3 '^FAILED SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_security_nosystemd.out" | grep -qE '^Count +N/A$'; then
         ok "security-info reports Failed Services Count: N/A when systemd is unavailable"
     else
         bad "security-info did not report N/A for failed services when systemd was unavailable"
     fi
-    if grep -A2 '^SSH$' /tmp/toolkit_test_security_nosystemd.out | grep -q 'N/A'; then
+    if grep -A2 '^SSH$' "${TEST_TMP_ROOT}/toolkit_test_security_nosystemd.out" | grep -q 'N/A'; then
         ok "security-info reports SSH N/A when systemd/systemctl is unavailable"
     else
         bad "security-info did not report SSH N/A when systemctl was unusable"
     fi
 else
-    bad "security-info failed (nonzero exit) when systemctl was entirely unusable: $(cat /tmp/toolkit_test_security_nosystemd.err)"
+    bad "security-info failed (nonzero exit) when systemctl was entirely unusable: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_nosystemd.err")"
 fi
 rm -rf "$STUB_DIR"
 
@@ -1189,16 +1198,16 @@ else
 fi
 
 echo "== process-info runs successfully (live host) =="
-if "${BIN_DIR}/process-info" >/tmp/toolkit_test_process.out 2>/tmp/toolkit_test_process.err; then
+if "${BIN_DIR}/process-info" >"${TEST_TMP_ROOT}/toolkit_test_process.out" 2>"${TEST_TMP_ROOT}/toolkit_test_process.err"; then
     ok "process-info exits 0"
-    if grep -q '^PROCESS OVERVIEW$' /tmp/toolkit_test_process.out && grep -q '^TOP CPU$' /tmp/toolkit_test_process.out && \
-       grep -q '^SYSTEM LOAD$' /tmp/toolkit_test_process.out; then
+    if grep -q '^PROCESS OVERVIEW$' "${TEST_TMP_ROOT}/toolkit_test_process.out" && grep -q '^TOP CPU$' "${TEST_TMP_ROOT}/toolkit_test_process.out" && \
+       grep -q '^SYSTEM LOAD$' "${TEST_TMP_ROOT}/toolkit_test_process.out"; then
         ok "process-info prints PROCESS OVERVIEW, TOP CPU and SYSTEM LOAD sections"
     else
         bad "process-info output is missing expected sections"
     fi
 else
-    bad "process-info exited non-zero: $(cat /tmp/toolkit_test_process.err)"
+    bad "process-info exited non-zero: $(cat "${TEST_TMP_ROOT}/toolkit_test_process.err")"
 fi
 
 echo "== process.sh pure-function tests (synthetic snapshot data) =="
@@ -1359,97 +1368,97 @@ MOCKEOF
 chmod +x "${MOCK_DIR}/ps"
 MOCK_PATH="${MOCK_DIR}:${PATH}"
 
-if PROCESS_MOCK_SCENARIO=normal PATH="$MOCK_PATH" "${BIN_DIR}/process-info" >/tmp/toolkit_test_process_normal.out 2>/tmp/toolkit_test_process_normal.err; then
-    if grep -qE '^Total processes +3$' /tmp/toolkit_test_process_normal.out; then
+if PROCESS_MOCK_SCENARIO=normal PATH="$MOCK_PATH" "${BIN_DIR}/process-info" >"${TEST_TMP_ROOT}/toolkit_test_process_normal.out" 2>"${TEST_TMP_ROOT}/toolkit_test_process_normal.err"; then
+    if grep -qE '^Total processes +3$' "${TEST_TMP_ROOT}/toolkit_test_process_normal.out"; then
         ok "process-info counts total processes correctly from a mocked snapshot"
     else
         bad "process-info did not report the correct total process count"
     fi
-    if grep -qE '^Running +1$' /tmp/toolkit_test_process_normal.out && grep -qE '^Sleeping +2$' /tmp/toolkit_test_process_normal.out; then
+    if grep -qE '^Running +1$' "${TEST_TMP_ROOT}/toolkit_test_process_normal.out" && grep -qE '^Sleeping +2$' "${TEST_TMP_ROOT}/toolkit_test_process_normal.out"; then
         ok "process-info counts running/sleeping states correctly (mocked)"
     else
         bad "process-info did not report running/sleeping counts correctly"
     fi
-    if grep -qF 'java -jar app.jar' /tmp/toolkit_test_process_normal.out; then
+    if grep -qF 'java -jar app.jar' "${TEST_TMP_ROOT}/toolkit_test_process_normal.out"; then
         ok "process-info displays a command line intact in its tables (mocked)"
     else
         bad "process-info did not display the mocked command line correctly"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_process_normal.out | grep -q 'No process anomalies'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_process_normal.out" | grep -q 'No process anomalies'; then
         ok "process-info raises no alert for a healthy mocked process set"
     else
         bad "process-info raised an unexpected alert for a healthy mocked process set"
     fi
 else
-    bad "process-info failed on the normal mocked scenario: $(cat /tmp/toolkit_test_process_normal.err)"
+    bad "process-info failed on the normal mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_process_normal.err")"
 fi
 
-if PROCESS_MOCK_SCENARIO=empty PATH="$MOCK_PATH" "${BIN_DIR}/process-info" >/tmp/toolkit_test_process_empty.out 2>/tmp/toolkit_test_process_empty.err; then
-    if grep -A2 '^PROCESS OVERVIEW$' /tmp/toolkit_test_process_empty.out | grep -q 'N/A'; then
+if PROCESS_MOCK_SCENARIO=empty PATH="$MOCK_PATH" "${BIN_DIR}/process-info" >"${TEST_TMP_ROOT}/toolkit_test_process_empty.out" 2>"${TEST_TMP_ROOT}/toolkit_test_process_empty.err"; then
+    if grep -A2 '^PROCESS OVERVIEW$' "${TEST_TMP_ROOT}/toolkit_test_process_empty.out" | grep -q 'N/A'; then
         ok "process-info handles an empty process list without crashing (reports N/A)"
     else
         bad "process-info did not gracefully handle an empty process list"
     fi
 else
-    bad "process-info crashed on an empty process list: $(cat /tmp/toolkit_test_process_empty.err)"
+    bad "process-info crashed on an empty process list: $(cat "${TEST_TMP_ROOT}/toolkit_test_process_empty.err")"
 fi
 
-if PROCESS_MOCK_SCENARIO=malformedrow PATH="$MOCK_PATH" "${BIN_DIR}/process-info" >/tmp/toolkit_test_process_malformed.out 2>/tmp/toolkit_test_process_malformed.err; then
+if PROCESS_MOCK_SCENARIO=malformedrow PATH="$MOCK_PATH" "${BIN_DIR}/process-info" >"${TEST_TMP_ROOT}/toolkit_test_process_malformed.out" 2>"${TEST_TMP_ROOT}/toolkit_test_process_malformed.err"; then
     ok "process-info tolerates a malformed/short ps row without crashing"
-    if grep -qE '^Total processes +2$' /tmp/toolkit_test_process_malformed.out; then
+    if grep -qE '^Total processes +2$' "${TEST_TMP_ROOT}/toolkit_test_process_malformed.out"; then
         ok "process-info still counts a malformed row toward the total"
     else
         bad "process-info did not count the malformed row toward the total correctly"
     fi
 else
-    bad "process-info crashed on a malformed ps row: $(cat /tmp/toolkit_test_process_malformed.err)"
+    bad "process-info crashed on a malformed ps row: $(cat "${TEST_TMP_ROOT}/toolkit_test_process_malformed.err")"
 fi
 
-if PROCESS_MOCK_SCENARIO=highcpu PATH="$MOCK_PATH" "${BIN_DIR}/process-info" >/tmp/toolkit_test_process_highcpu.out 2>/tmp/toolkit_test_process_highcpu.err; then
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_process_highcpu.out | grep -qE '1 process\(es\) above 90% CPU'; then
+if PROCESS_MOCK_SCENARIO=highcpu PATH="$MOCK_PATH" "${BIN_DIR}/process-info" >"${TEST_TMP_ROOT}/toolkit_test_process_highcpu.out" 2>"${TEST_TMP_ROOT}/toolkit_test_process_highcpu.err"; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_process_highcpu.out" | grep -qE '1 process\(es\) above 90% CPU'; then
         ok "process-info alerts on a process exceeding the documented 90% CPU threshold"
     else
         bad "process-info did not alert on the high-CPU mocked process"
     fi
 else
-    bad "process-info failed on the highcpu mocked scenario: $(cat /tmp/toolkit_test_process_highcpu.err)"
+    bad "process-info failed on the highcpu mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_process_highcpu.err")"
 fi
 
-if PROCESS_MOCK_SCENARIO=highmem PATH="$MOCK_PATH" "${BIN_DIR}/process-info" >/tmp/toolkit_test_process_highmem.out 2>/tmp/toolkit_test_process_highmem.err; then
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_process_highmem.out | grep -qE '1 process\(es\) above 90% memory'; then
+if PROCESS_MOCK_SCENARIO=highmem PATH="$MOCK_PATH" "${BIN_DIR}/process-info" >"${TEST_TMP_ROOT}/toolkit_test_process_highmem.out" 2>"${TEST_TMP_ROOT}/toolkit_test_process_highmem.err"; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_process_highmem.out" | grep -qE '1 process\(es\) above 90% memory'; then
         ok "process-info alerts on a process exceeding the documented 90% memory threshold"
     else
         bad "process-info did not alert on the high-memory mocked process"
     fi
 else
-    bad "process-info failed on the highmem mocked scenario: $(cat /tmp/toolkit_test_process_highmem.err)"
+    bad "process-info failed on the highmem mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_process_highmem.err")"
 fi
 
-if PROCESS_MOCK_SCENARIO=zombie PATH="$MOCK_PATH" "${BIN_DIR}/process-info" >/tmp/toolkit_test_process_zombie.out 2>/tmp/toolkit_test_process_zombie.err; then
-    if grep -qE '^Zombie +1$' /tmp/toolkit_test_process_zombie.out && \
-       grep -A5 '^ALERTS$' /tmp/toolkit_test_process_zombie.out | grep -qE '1 zombie process\(es\)'; then
+if PROCESS_MOCK_SCENARIO=zombie PATH="$MOCK_PATH" "${BIN_DIR}/process-info" >"${TEST_TMP_ROOT}/toolkit_test_process_zombie.out" 2>"${TEST_TMP_ROOT}/toolkit_test_process_zombie.err"; then
+    if grep -qE '^Zombie +1$' "${TEST_TMP_ROOT}/toolkit_test_process_zombie.out" && \
+       grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_process_zombie.out" | grep -qE '1 zombie process\(es\)'; then
         ok "process-info detects and alerts on a mocked zombie process"
     else
         bad "process-info did not detect/alert on the mocked zombie process"
     fi
 else
-    bad "process-info failed on the zombie mocked scenario: $(cat /tmp/toolkit_test_process_zombie.err)"
+    bad "process-info failed on the zombie mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_process_zombie.err")"
 fi
 
-if PROCESS_MOCK_SCENARIO=manyprocs PATH="$MOCK_PATH" "${BIN_DIR}/process-info" >/tmp/toolkit_test_process_many.out 2>/tmp/toolkit_test_process_many.err; then
-    cpu_rows="$(awk '/^TOP CPU$/{f=1; next} /^$/{f=0} f && $1 ~ /^[0-9]+$/' /tmp/toolkit_test_process_many.out | wc -l | tr -d '[:space:]')"
+if PROCESS_MOCK_SCENARIO=manyprocs PATH="$MOCK_PATH" "${BIN_DIR}/process-info" >"${TEST_TMP_ROOT}/toolkit_test_process_many.out" 2>"${TEST_TMP_ROOT}/toolkit_test_process_many.err"; then
+    cpu_rows="$(awk '/^TOP CPU$/{f=1; next} /^$/{f=0} f && $1 ~ /^[0-9]+$/' "${TEST_TMP_ROOT}/toolkit_test_process_many.out" | wc -l | tr -d '[:space:]')"
     if [[ "$cpu_rows" -eq 5 ]]; then
         ok "process-info bounds TOP CPU to exactly 5 rows even with 10 mocked processes"
     else
         bad "process-info TOP CPU was not bounded to 5 rows (got $cpu_rows)"
     fi
 else
-    bad "process-info failed on the manyprocs mocked scenario: $(cat /tmp/toolkit_test_process_many.err)"
+    bad "process-info failed on the manyprocs mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_process_many.err")"
 fi
 
 COUNTER_FILE="$(mktemp)"
 if PROCESS_MOCK_SCENARIO=manyprocs PROCESS_MOCK_COUNTER_FILE="$COUNTER_FILE" PATH="$MOCK_PATH" \
-    "${BIN_DIR}/process-info" >/tmp/toolkit_test_process_onecall.out 2>/tmp/toolkit_test_process_onecall.err; then
+    "${BIN_DIR}/process-info" >"${TEST_TMP_ROOT}/toolkit_test_process_onecall.out" 2>"${TEST_TMP_ROOT}/toolkit_test_process_onecall.err"; then
     call_count="$(wc -l <"$COUNTER_FILE" | tr -d '[:space:]')"
     if [[ "$call_count" -eq 1 ]]; then
         ok "process-info takes exactly one ps snapshot (no per-PID subprocess spawning)"
@@ -1457,7 +1466,7 @@ if PROCESS_MOCK_SCENARIO=manyprocs PROCESS_MOCK_COUNTER_FILE="$COUNTER_FILE" PAT
         bad "process-info invoked ps ${call_count} times instead of exactly once"
     fi
 else
-    bad "process-info failed while counting ps invocations: $(cat /tmp/toolkit_test_process_onecall.err)"
+    bad "process-info failed while counting ps invocations: $(cat "${TEST_TMP_ROOT}/toolkit_test_process_onecall.err")"
 fi
 rm -f "$COUNTER_FILE"
 rm -rf "$MOCK_DIR"
@@ -1466,25 +1475,25 @@ echo "== process-info handles ps unavailable =="
 STUB_DIR="$(mktemp -d)"
 printf '#!/bin/sh\nexit 1\n' >"${STUB_DIR}/ps"
 chmod +x "${STUB_DIR}/ps"
-if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/process-info" >/tmp/toolkit_test_process_nops.out 2>/tmp/toolkit_test_process_nops.err; then
-    if grep -A2 '^PROCESS OVERVIEW$' /tmp/toolkit_test_process_nops.out | grep -q 'N/A' && \
-       grep -A2 '^TOP CPU$' /tmp/toolkit_test_process_nops.out | grep -q 'N/A'; then
+if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/process-info" >"${TEST_TMP_ROOT}/toolkit_test_process_nops.out" 2>"${TEST_TMP_ROOT}/toolkit_test_process_nops.err"; then
+    if grep -A2 '^PROCESS OVERVIEW$' "${TEST_TMP_ROOT}/toolkit_test_process_nops.out" | grep -q 'N/A' && \
+       grep -A2 '^TOP CPU$' "${TEST_TMP_ROOT}/toolkit_test_process_nops.out" | grep -q 'N/A'; then
         ok "process-info reports N/A throughout and still exits 0 when ps is unavailable"
     else
         bad "process-info did not degrade gracefully when ps was unavailable"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_process_nops.out | grep -q 'No process anomalies'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_process_nops.out" | grep -q 'No process anomalies'; then
         ok "process-info does not raise a false alert when ps is simply unavailable"
     else
         bad "process-info raised an unexpected alert when ps was unavailable"
     fi
-    if grep -q '^SYSTEM LOAD$' /tmp/toolkit_test_process_nops.out; then
+    if grep -q '^SYSTEM LOAD$' "${TEST_TMP_ROOT}/toolkit_test_process_nops.out"; then
         ok "process-info's SYSTEM LOAD section is unaffected by ps being unavailable (independent /proc/loadavg source)"
     else
         bad "process-info's SYSTEM LOAD section was missing when ps was unavailable"
     fi
 else
-    bad "process-info failed (nonzero exit) when ps was unavailable: $(cat /tmp/toolkit_test_process_nops.err)"
+    bad "process-info failed (nonzero exit) when ps was unavailable: $(cat "${TEST_TMP_ROOT}/toolkit_test_process_nops.err")"
 fi
 rm -rf "$STUB_DIR"
 
@@ -1523,21 +1532,21 @@ else
 fi
 
 echo "== logs-info runs successfully (live host) =="
-if "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs.out 2>/tmp/toolkit_test_logs.err; then
+if "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs.err"; then
     ok "logs-info exits 0"
-    if grep -q '^LOG SUMMARY$' /tmp/toolkit_test_logs.out && grep -q '^ERRORS$' /tmp/toolkit_test_logs.out && \
-       grep -q '^RECENT EVENTS$' /tmp/toolkit_test_logs.out && grep -q '^KERNEL$' /tmp/toolkit_test_logs.out; then
+    if grep -q '^LOG SUMMARY$' "${TEST_TMP_ROOT}/toolkit_test_logs.out" && grep -q '^ERRORS$' "${TEST_TMP_ROOT}/toolkit_test_logs.out" && \
+       grep -q '^RECENT EVENTS$' "${TEST_TMP_ROOT}/toolkit_test_logs.out" && grep -q '^KERNEL$' "${TEST_TMP_ROOT}/toolkit_test_logs.out"; then
         ok "logs-info prints LOG SUMMARY, ERRORS, RECENT EVENTS and KERNEL sections"
     else
         bad "logs-info output is missing expected sections"
     fi
-    if grep -qE '^Window +Last 24 hours$' /tmp/toolkit_test_logs.out; then
+    if grep -qE '^Window +Last 24 hours$' "${TEST_TMP_ROOT}/toolkit_test_logs.out"; then
         ok "logs-info clearly states the 24-hour window"
     else
         bad "logs-info did not clearly state the time window"
     fi
 else
-    bad "logs-info exited non-zero: $(cat /tmp/toolkit_test_logs.err)"
+    bad "logs-info exited non-zero: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs.err")"
 fi
 
 echo "== logs.sh pure-function tests (truncate_text, malformed jq input) =="
@@ -1635,164 +1644,164 @@ MOCKEOF
 chmod +x "${MOCK_DIR}/journalctl"
 MOCK_PATH="${MOCK_DIR}:${PATH}"
 
-if LOGS_MOCK_SCENARIO=normal PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_normal.out 2>/tmp/toolkit_test_logs_normal.err; then
-    if grep -qE '^0\.0\.0\.0' /tmp/toolkit_test_logs_normal.out; then
+if LOGS_MOCK_SCENARIO=normal PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_normal.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_normal.err"; then
+    if grep -qE '^0\.0\.0\.0' "${TEST_TMP_ROOT}/toolkit_test_logs_normal.out"; then
         bad "logs-info leaked unrelated network data (sanity check failed)"
     else
         ok "logs-info mocked normal scenario ran without unrelated leakage"
     fi
-    if grep -qE 'diskcheck\.service' /tmp/toolkit_test_logs_normal.out; then
+    if grep -qE 'diskcheck\.service' "${TEST_TMP_ROOT}/toolkit_test_logs_normal.out"; then
         ok "logs-info RECENT EVENTS shows the mocked unit/source correctly"
     else
         bad "logs-info RECENT EVENTS did not show the expected mocked unit"
     fi
-    if grep -qE 'diskcheck\.service +warning +disk space low on /data$' /tmp/toolkit_test_logs_normal.out; then
+    if grep -qE 'diskcheck\.service +warning +disk space low on /data$' "${TEST_TMP_ROOT}/toolkit_test_logs_normal.out"; then
         ok "logs-info RECENT EVENTS renders priority and message correctly (mocked)"
     else
         bad "logs-info RECENT EVENTS row did not match expected priority/message"
     fi
 else
-    bad "logs-info failed on the normal mocked scenario: $(cat /tmp/toolkit_test_logs_normal.err)"
+    bad "logs-info failed on the normal mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_normal.err")"
 fi
 
-if LOGS_MOCK_SCENARIO=empty PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_empty.out 2>/tmp/toolkit_test_logs_empty.err; then
-    if grep -qE '^Errors +0$' /tmp/toolkit_test_logs_empty.out && grep -qE '^Warnings +0$' /tmp/toolkit_test_logs_empty.out; then
+if LOGS_MOCK_SCENARIO=empty PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_empty.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_empty.err"; then
+    if grep -qE '^Errors +0$' "${TEST_TMP_ROOT}/toolkit_test_logs_empty.out" && grep -qE '^Warnings +0$' "${TEST_TMP_ROOT}/toolkit_test_logs_empty.out"; then
         ok "logs-info reports 0/0 for a genuinely empty journal (not N/A)"
     else
         bad "logs-info did not report 0 counts correctly for an empty journal"
     fi
-    if grep -A2 '^RECENT EVENTS$' /tmp/toolkit_test_logs_empty.out | grep -q 'None'; then
+    if grep -A2 '^RECENT EVENTS$' "${TEST_TMP_ROOT}/toolkit_test_logs_empty.out" | grep -q 'None'; then
         ok "logs-info shows 'None' for RECENT EVENTS with an empty journal"
     else
         bad "logs-info did not show 'None' for empty recent events"
     fi
-    if grep -qE '^Errors/warnings +0$' /tmp/toolkit_test_logs_empty.out; then
+    if grep -qE '^Errors/warnings +0$' "${TEST_TMP_ROOT}/toolkit_test_logs_empty.out"; then
         ok "logs-info reports 0 kernel events for an empty journal"
     else
         bad "logs-info did not report 0 kernel events correctly"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_logs_empty.out | grep -q 'No recent log anomalies'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_logs_empty.out" | grep -q 'No recent log anomalies'; then
         ok "logs-info raises no alert for a completely clean/empty journal"
     else
         bad "logs-info raised an unexpected alert for an empty journal"
     fi
 else
-    bad "logs-info failed on the empty mocked scenario: $(cat /tmp/toolkit_test_logs_empty.err)"
+    bad "logs-info failed on the empty mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_empty.err")"
 fi
 
-if LOGS_MOCK_SCENARIO=counts PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_counts.out 2>/tmp/toolkit_test_logs_counts.err; then
-    if grep -qE '^Errors +2$' /tmp/toolkit_test_logs_counts.out && grep -qE '^Warnings +5$' /tmp/toolkit_test_logs_counts.out; then
+if LOGS_MOCK_SCENARIO=counts PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_counts.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_counts.err"; then
+    if grep -qE '^Errors +2$' "${TEST_TMP_ROOT}/toolkit_test_logs_counts.out" && grep -qE '^Warnings +5$' "${TEST_TMP_ROOT}/toolkit_test_logs_counts.out"; then
         ok "logs-info parses mocked error (2) and warning (5) counts correctly"
     else
         bad "logs-info did not parse the mocked error/warning counts correctly"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_logs_counts.out | grep -qE '2 error-level journal entries in the last 24h'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_logs_counts.out" | grep -qE '2 error-level journal entries in the last 24h'; then
         ok "logs-info alerts on a nonzero error count"
     else
         bad "logs-info did not alert on the mocked error count"
     fi
 else
-    bad "logs-info failed on the counts mocked scenario: $(cat /tmp/toolkit_test_logs_counts.err)"
+    bad "logs-info failed on the counts mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_counts.err")"
 fi
 
-if LOGS_MOCK_SCENARIO=highwarnings PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_highwarn.out 2>/tmp/toolkit_test_logs_highwarn.err; then
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_logs_highwarn.out | grep -qE '60 warning-level journal entries.*>= 50'; then
+if LOGS_MOCK_SCENARIO=highwarnings PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_highwarn.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_highwarn.err"; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_logs_highwarn.out" | grep -qE '60 warning-level journal entries.*>= 50'; then
         ok "logs-info alerts when warnings reach the documented threshold (60 >= 50)"
     else
         bad "logs-info did not alert on warnings above the documented threshold"
     fi
 else
-    bad "logs-info failed on the highwarnings mocked scenario: $(cat /tmp/toolkit_test_logs_highwarn.err)"
+    bad "logs-info failed on the highwarnings mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_highwarn.err")"
 fi
 
-if LOGS_MOCK_SCENARIO=longmessage PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_longmsg.out 2>/tmp/toolkit_test_logs_longmsg.err; then
-    if grep -q '\.\.\.$' /tmp/toolkit_test_logs_longmsg.out; then
+if LOGS_MOCK_SCENARIO=longmessage PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_longmsg.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_longmsg.err"; then
+    if grep -q '\.\.\.$' "${TEST_TMP_ROOT}/toolkit_test_logs_longmsg.out"; then
         ok "logs-info truncates a long log message for display (mocked)"
     else
         bad "logs-info did not truncate the mocked long message"
     fi
-    if awk '{ if (length($0) > 200) found=1 } END { exit !found }' /tmp/toolkit_test_logs_longmsg.out; then
+    if awk '{ if (length($0) > 200) found=1 } END { exit !found }' "${TEST_TMP_ROOT}/toolkit_test_logs_longmsg.out"; then
         bad "logs-info printed an unbounded-length line for the long message"
     else
         ok "logs-info kept output lines bounded even with a very long source message"
     fi
 else
-    bad "logs-info failed on the longmessage mocked scenario: $(cat /tmp/toolkit_test_logs_longmsg.err)"
+    bad "logs-info failed on the longmessage mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_longmsg.err")"
 fi
 
-if LOGS_MOCK_SCENARIO=malformed PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_malformed.out 2>/tmp/toolkit_test_logs_malformed.err; then
+if LOGS_MOCK_SCENARIO=malformed PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_malformed.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_malformed.err"; then
     ok "logs-info tolerates a malformed (non-JSON) journal line without crashing"
-    if grep -q 'a valid entry' /tmp/toolkit_test_logs_malformed.out; then
+    if grep -q 'a valid entry' "${TEST_TMP_ROOT}/toolkit_test_logs_malformed.out"; then
         ok "logs-info still shows the valid entry parsed before the malformed one"
     else
         bad "logs-info lost the valid entry when a malformed line followed it"
     fi
 else
-    bad "logs-info crashed on malformed journal output: $(cat /tmp/toolkit_test_logs_malformed.err)"
+    bad "logs-info crashed on malformed journal output: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_malformed.err")"
 fi
 
-if LOGS_MOCK_SCENARIO=missingfields PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_missingfields.out 2>/tmp/toolkit_test_logs_missingfields.err; then
+if LOGS_MOCK_SCENARIO=missingfields PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_missingfields.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_missingfields.err"; then
     ok "logs-info tolerates a journal entry missing priority/unit fields without crashing"
 else
-    bad "logs-info crashed on a journal entry with missing fields: $(cat /tmp/toolkit_test_logs_missingfields.err)"
+    bad "logs-info crashed on a journal entry with missing fields: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_missingfields.err")"
 fi
 
-if LOGS_MOCK_SCENARIO=manyevents PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_many.out 2>/tmp/toolkit_test_logs_many.err; then
-    event_rows="$(awk '/^RECENT EVENTS$/{f=1; next} /^$/{f=0} f && /^[0-9]{4}-/' /tmp/toolkit_test_logs_many.out | wc -l | tr -d '[:space:]')"
+if LOGS_MOCK_SCENARIO=manyevents PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_many.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_many.err"; then
+    event_rows="$(awk '/^RECENT EVENTS$/{f=1; next} /^$/{f=0} f && /^[0-9]{4}-/' "${TEST_TMP_ROOT}/toolkit_test_logs_many.out" | wc -l | tr -d '[:space:]')"
     if [[ "$event_rows" -eq 10 ]]; then
         ok "logs-info bounds RECENT EVENTS to exactly 10 rows even with 50 mocked events"
     else
         bad "logs-info RECENT EVENTS was not bounded to 10 rows (got $event_rows)"
     fi
 else
-    bad "logs-info failed on the manyevents mocked scenario: $(cat /tmp/toolkit_test_logs_many.err)"
+    bad "logs-info failed on the manyevents mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_many.err")"
 fi
 
-if LOGS_MOCK_SCENARIO=kernelcounts PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_kernel.out 2>/tmp/toolkit_test_logs_kernel.err; then
-    if grep -qE '^Errors/warnings +3$' /tmp/toolkit_test_logs_kernel.out; then
+if LOGS_MOCK_SCENARIO=kernelcounts PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_kernel.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_kernel.err"; then
+    if grep -qE '^Errors/warnings +3$' "${TEST_TMP_ROOT}/toolkit_test_logs_kernel.out"; then
         ok "logs-info reports the mocked kernel event count correctly"
     else
         bad "logs-info did not report the mocked kernel event count correctly"
     fi
 else
-    bad "logs-info failed on the kernelcounts mocked scenario: $(cat /tmp/toolkit_test_logs_kernel.err)"
+    bad "logs-info failed on the kernelcounts mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_kernel.err")"
 fi
 
-if LOGS_MOCK_SCENARIO=kernelunavailable PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_nokernel.out 2>/tmp/toolkit_test_logs_nokernel.err; then
-    if grep -qE '^Errors/warnings +N/A$' /tmp/toolkit_test_logs_nokernel.out; then
+if LOGS_MOCK_SCENARIO=kernelunavailable PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_nokernel.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_nokernel.err"; then
+    if grep -qE '^Errors/warnings +N/A$' "${TEST_TMP_ROOT}/toolkit_test_logs_nokernel.out"; then
         ok "logs-info reports kernel events as N/A when the kernel log query fails (e.g. permission)"
     else
         bad "logs-info did not report N/A for an unavailable kernel log"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_logs_nokernel.out | grep -qi 'kernel'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_logs_nokernel.out" | grep -qi 'kernel'; then
         bad "logs-info incorrectly alerted merely because kernel data was unavailable"
     else
         ok "logs-info does not alert merely because kernel log data is unavailable"
     fi
 else
-    bad "logs-info failed on the kernelunavailable mocked scenario: $(cat /tmp/toolkit_test_logs_nokernel.err)"
+    bad "logs-info failed on the kernelunavailable mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_nokernel.err")"
 fi
 
-if LOGS_MOCK_SCENARIO=denied PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_denied.out 2>/tmp/toolkit_test_logs_denied.err; then
-    if grep -qE '^Errors +N/A$' /tmp/toolkit_test_logs_denied.out && grep -qE '^Warnings +N/A$' /tmp/toolkit_test_logs_denied.out; then
+if LOGS_MOCK_SCENARIO=denied PATH="$MOCK_PATH" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_denied.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_denied.err"; then
+    if grep -qE '^Errors +N/A$' "${TEST_TMP_ROOT}/toolkit_test_logs_denied.out" && grep -qE '^Warnings +N/A$' "${TEST_TMP_ROOT}/toolkit_test_logs_denied.out"; then
         ok "logs-info reports N/A across the board on permission-denied journal access, without crashing"
     else
         bad "logs-info did not gracefully report N/A on permission-denied journal access"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_logs_denied.out | grep -q 'No recent log anomalies'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_logs_denied.out" | grep -q 'No recent log anomalies'; then
         ok "logs-info raises no false alert when journal access is denied (N/A is not a problem signal)"
     else
         bad "logs-info incorrectly alerted when journal access was simply denied"
     fi
 else
-    bad "logs-info failed (nonzero exit) on permission-denied journal access: $(cat /tmp/toolkit_test_logs_denied.err)"
+    bad "logs-info failed (nonzero exit) on permission-denied journal access: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_denied.err")"
 fi
 
 start_ts=$(date +%s)
-if LOGS_MOCK_SCENARIO=timeout PATH="$MOCK_PATH" timeout 20 "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_timeout.out 2>/tmp/toolkit_test_logs_timeout.err; then
+if LOGS_MOCK_SCENARIO=timeout PATH="$MOCK_PATH" timeout 20 "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_timeout.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_timeout.err"; then
     end_ts=$(date +%s)
     elapsed=$(( end_ts - start_ts ))
-    if [[ "$elapsed" -lt 15 ]] && grep -qE '^Errors +N/A$' /tmp/toolkit_test_logs_timeout.out; then
+    if [[ "$elapsed" -lt 15 ]] && grep -qE '^Errors +N/A$' "${TEST_TMP_ROOT}/toolkit_test_logs_timeout.out"; then
         ok "logs-info bounds a hanging journalctl with its internal per-call timeout (finished in ${elapsed}s, reported N/A)"
     else
         bad "logs-info did not bound the hanging journalctl correctly (elapsed=${elapsed}s)"
@@ -1803,7 +1812,7 @@ fi
 
 COUNTER_FILE="$(mktemp)"
 if LOGS_MOCK_SCENARIO=manyevents LOGS_MOCK_COUNTER_FILE="$COUNTER_FILE" PATH="$MOCK_PATH" \
-    "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_onecall.out 2>/tmp/toolkit_test_logs_onecall.err; then
+    "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_onecall.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_onecall.err"; then
     call_count="$(wc -l <"$COUNTER_FILE" | tr -d '[:space:]')"
     if [[ "$call_count" -le 5 ]]; then
         ok "logs-info makes a small fixed number of journalctl calls (${call_count}), not one per event"
@@ -1811,7 +1820,7 @@ if LOGS_MOCK_SCENARIO=manyevents LOGS_MOCK_COUNTER_FILE="$COUNTER_FILE" PATH="$M
         bad "logs-info invoked journalctl ${call_count} times - expected a small fixed number, not scaling with event count"
     fi
 else
-    bad "logs-info failed while counting journalctl invocations: $(cat /tmp/toolkit_test_logs_onecall.err)"
+    bad "logs-info failed while counting journalctl invocations: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_onecall.err")"
 fi
 rm -f "$COUNTER_FILE"
 rm -rf "$MOCK_DIR"
@@ -1820,24 +1829,24 @@ echo "== logs-info handles journalctl unavailable =="
 STUB_DIR="$(mktemp -d)"
 printf '#!/bin/sh\nexit 1\n' >"${STUB_DIR}/journalctl"
 chmod +x "${STUB_DIR}/journalctl"
-if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_nojournalctl.out 2>/tmp/toolkit_test_logs_nojournalctl.err; then
-    if grep -A3 '^LOG SUMMARY$' /tmp/toolkit_test_logs_nojournalctl.out | grep -qE 'Journal +N/A'; then
+if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_nojournalctl.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_nojournalctl.err"; then
+    if grep -A3 '^LOG SUMMARY$' "${TEST_TMP_ROOT}/toolkit_test_logs_nojournalctl.out" | grep -qE 'Journal +N/A'; then
         ok "logs-info reports Journal: N/A and exits 0 when journalctl is unavailable"
     else
         bad "logs-info did not report Journal: N/A when journalctl was unavailable"
     fi
-    if grep -qE '^Errors +N/A$' /tmp/toolkit_test_logs_nojournalctl.out; then
+    if grep -qE '^Errors +N/A$' "${TEST_TMP_ROOT}/toolkit_test_logs_nojournalctl.out"; then
         ok "logs-info propagates N/A to ERRORS when journalctl is unavailable"
     else
         bad "logs-info did not propagate N/A to ERRORS when journalctl was unavailable"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_logs_nojournalctl.out | grep -q 'No recent log anomalies'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_logs_nojournalctl.out" | grep -q 'No recent log anomalies'; then
         ok "logs-info does not alert merely because journalctl is unavailable"
     else
         bad "logs-info incorrectly alerted when journalctl was simply unavailable"
     fi
 else
-    bad "logs-info failed when journalctl was unavailable: $(cat /tmp/toolkit_test_logs_nojournalctl.err)"
+    bad "logs-info failed when journalctl was unavailable: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_nojournalctl.err")"
 fi
 rm -rf "$STUB_DIR"
 
@@ -1845,14 +1854,14 @@ echo "== logs-info handles systemd unavailable (failed-service section) =="
 STUB_DIR="$(mktemp -d)"
 printf '#!/bin/sh\nexit 1\n' >"${STUB_DIR}/systemctl"
 chmod +x "${STUB_DIR}/systemctl"
-if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_nosystemd.out 2>/tmp/toolkit_test_logs_nosystemd.err; then
-    if grep -A3 '^FAILED SERVICES$' /tmp/toolkit_test_logs_nosystemd.out | grep -qE '^Count +N/A$'; then
+if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_nosystemd.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_nosystemd.err"; then
+    if grep -A3 '^FAILED SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_logs_nosystemd.out" | grep -qE '^Count +N/A$'; then
         ok "logs-info reports FAILED SERVICES Count: N/A when systemd is unavailable"
     else
         bad "logs-info did not report N/A for failed services when systemd was unavailable"
     fi
 else
-    bad "logs-info failed when systemctl was unavailable: $(cat /tmp/toolkit_test_logs_nosystemd.err)"
+    bad "logs-info failed when systemctl was unavailable: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_nosystemd.err")"
 fi
 rm -rf "$STUB_DIR"
 
@@ -1860,14 +1869,14 @@ echo "== logs-info handles jq unavailable (recent events degrade gracefully) =="
 STUB_DIR="$(mktemp -d)"
 printf '#!/bin/sh\nexit 1\n' >"${STUB_DIR}/jq"
 chmod +x "${STUB_DIR}/jq"
-if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_nojq.out 2>/tmp/toolkit_test_logs_nojq.err; then
-    if grep -A2 '^RECENT EVENTS$' /tmp/toolkit_test_logs_nojq.out | grep -q 'N/A'; then
+if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_nojq.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_nojq.err"; then
+    if grep -A2 '^RECENT EVENTS$' "${TEST_TMP_ROOT}/toolkit_test_logs_nojq.out" | grep -q 'N/A'; then
         ok "logs-info reports RECENT EVENTS: N/A gracefully when jq is unavailable"
     else
         bad "logs-info did not gracefully handle jq being unavailable"
     fi
 else
-    bad "logs-info failed when jq was unavailable: $(cat /tmp/toolkit_test_logs_nojq.err)"
+    bad "logs-info failed when jq was unavailable: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_nojq.err")"
 fi
 rm -rf "$STUB_DIR"
 
@@ -1894,29 +1903,29 @@ exit 0
 MOCKEOF
 chmod +x "${MOCK_DIR}/systemctl" "${MOCK_DIR}/journalctl"
 
-if LOGS_MOCK_SVC_SCENARIO=zero PATH="${MOCK_DIR}:${PATH}" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_svczero.out 2>/tmp/toolkit_test_logs_svczero.err; then
-    if grep -A3 '^FAILED SERVICES$' /tmp/toolkit_test_logs_svczero.out | grep -qE '^Count +0$'; then
+if LOGS_MOCK_SVC_SCENARIO=zero PATH="${MOCK_DIR}:${PATH}" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_svczero.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_svczero.err"; then
+    if grep -A3 '^FAILED SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_logs_svczero.out" | grep -qE '^Count +0$'; then
         ok "logs-info reports 0 failed services and raises no alert for it (mocked, reusing services.sh)"
     else
         bad "logs-info did not report 0 failed services correctly"
     fi
 else
-    bad "logs-info failed on the zero-failed-services mocked scenario: $(cat /tmp/toolkit_test_logs_svczero.err)"
+    bad "logs-info failed on the zero-failed-services mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_svczero.err")"
 fi
 
-if LOGS_MOCK_SVC_SCENARIO=nonzero PATH="${MOCK_DIR}:${PATH}" "${BIN_DIR}/logs-info" >/tmp/toolkit_test_logs_svcnonzero.out 2>/tmp/toolkit_test_logs_svcnonzero.err; then
-    if grep -A3 '^FAILED SERVICES$' /tmp/toolkit_test_logs_svcnonzero.out | grep -qE '^Count +2$'; then
+if LOGS_MOCK_SVC_SCENARIO=nonzero PATH="${MOCK_DIR}:${PATH}" "${BIN_DIR}/logs-info" >"${TEST_TMP_ROOT}/toolkit_test_logs_svcnonzero.out" 2>"${TEST_TMP_ROOT}/toolkit_test_logs_svcnonzero.err"; then
+    if grep -A3 '^FAILED SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_logs_svcnonzero.out" | grep -qE '^Count +2$'; then
         ok "logs-info reports 2 failed services via services.sh reuse (mocked)"
     else
         bad "logs-info did not report 2 failed services correctly"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_logs_svcnonzero.out | grep -qi '2 failed systemd service'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_logs_svcnonzero.out" | grep -qi '2 failed systemd service'; then
         ok "logs-info alerts on nonzero failed services"
     else
         bad "logs-info did not alert on the mocked failed services"
     fi
 else
-    bad "logs-info failed on the nonzero-failed-services mocked scenario: $(cat /tmp/toolkit_test_logs_svcnonzero.err)"
+    bad "logs-info failed on the nonzero-failed-services mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_logs_svcnonzero.err")"
 fi
 rm -rf "$MOCK_DIR"
 
@@ -1973,15 +1982,15 @@ else
 fi
 
 echo "== backup-info runs successfully (live host) =="
-if "${BIN_DIR}/backup-info" >/tmp/toolkit_test_backup.out 2>/tmp/toolkit_test_backup.err; then
+if "${BIN_DIR}/backup-info" >"${TEST_TMP_ROOT}/toolkit_test_backup.out" 2>"${TEST_TMP_ROOT}/toolkit_test_backup.err"; then
     ok "backup-info exits 0"
-    if grep -q '^BACKUP STATUS$' /tmp/toolkit_test_backup.out; then
+    if grep -q '^BACKUP STATUS$' "${TEST_TMP_ROOT}/toolkit_test_backup.out"; then
         ok "backup-info prints BACKUP STATUS section"
     else
         bad "backup-info output is missing the BACKUP STATUS section"
     fi
 else
-    bad "backup-info exited non-zero: $(cat /tmp/toolkit_test_backup.err)"
+    bad "backup-info exited non-zero: $(cat "${TEST_TMP_ROOT}/toolkit_test_backup.err")"
 fi
 
 echo "== backup.sh pure-function tests: age/timestamp handling =="
@@ -2198,82 +2207,82 @@ MOCK_PATH="${MOCK_DIR}:${PATH}"
 FAKE_HOME2="$(mktemp -d)"
 
 if BACKUP_LOCAL_CANDIDATES_OVERRIDE=/nonexistent-dir-xyz BACKUP_MOCK_TIMER_SCENARIO=none BACKUP_MOCK_CRON_SCENARIO=none HOME="$FAKE_HOME2" PATH="$MOCK_PATH" \
-    "${BIN_DIR}/backup-info" >/tmp/toolkit_test_backup_none.out 2>/tmp/toolkit_test_backup_none.err; then
-    if grep -qE '^Discovered sources +0$' /tmp/toolkit_test_backup_none.out; then
+    "${BIN_DIR}/backup-info" >"${TEST_TMP_ROOT}/toolkit_test_backup_none.out" 2>"${TEST_TMP_ROOT}/toolkit_test_backup_none.err"; then
+    if grep -qE '^Discovered sources +0$' "${TEST_TMP_ROOT}/toolkit_test_backup_none.out"; then
         ok "backup-info reports 0 discovered sources when nothing matches (mocked)"
     else
         bad "backup-info did not report 0 discovered sources correctly"
     fi
-    if grep -q 'No configured/discoverable backup sources' /tmp/toolkit_test_backup_none.out; then
+    if grep -q 'No configured/discoverable backup sources' "${TEST_TMP_ROOT}/toolkit_test_backup_none.out"; then
         ok "backup-info shows the explicit no-source message rather than an empty table"
     else
         bad "backup-info did not show the no-source message"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_backup_none.out | grep -q 'No backup anomalies'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_backup_none.out" | grep -q 'No backup anomalies'; then
         ok "backup-info raises no alert when no backup source is discoverable (not a problem, just unobservable)"
     else
         bad "backup-info incorrectly alerted when no backup source was discovered"
     fi
 else
-    bad "backup-info failed on the no-source mocked scenario: $(cat /tmp/toolkit_test_backup_none.err)"
+    bad "backup-info failed on the no-source mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_backup_none.err")"
 fi
 
 if BACKUP_LOCAL_CANDIDATES_OVERRIDE=/nonexistent-dir-xyz BACKUP_MOCK_TIMER_SCENARIO=backup BACKUP_MOCK_CRON_SCENARIO=backup HOME="$FAKE_HOME2" PATH="$MOCK_PATH" \
-    "${BIN_DIR}/backup-info" >/tmp/toolkit_test_backup_found.out 2>/tmp/toolkit_test_backup_found.err; then
-    if grep -qE '^Discovered sources +2$' /tmp/toolkit_test_backup_found.out; then
+    "${BIN_DIR}/backup-info" >"${TEST_TMP_ROOT}/toolkit_test_backup_found.out" 2>"${TEST_TMP_ROOT}/toolkit_test_backup_found.err"; then
+    if grep -qE '^Discovered sources +2$' "${TEST_TMP_ROOT}/toolkit_test_backup_found.out"; then
         ok "backup-info reports 2 discovered sources (one timer, one cron entry) (mocked)"
     else
         bad "backup-info did not report the correct discovered-source count"
     fi
-    if grep -q 'nightly-backup.timer' /tmp/toolkit_test_backup_found.out; then
+    if grep -q 'nightly-backup.timer' "${TEST_TMP_ROOT}/toolkit_test_backup_found.out"; then
         ok "backup-info discovers a backup-named systemd timer (mocked)"
     else
         bad "backup-info did not discover the mocked backup timer"
     fi
-    if grep -q 'dump-database.sh' /tmp/toolkit_test_backup_found.out; then
+    if grep -q 'dump-database.sh' "${TEST_TMP_ROOT}/toolkit_test_backup_found.out"; then
         ok "backup-info discovers a backup-related cron entry and shows its sanitized summary (mocked)"
     else
         bad "backup-info did not discover the mocked backup-related cron entry"
     fi
 else
-    bad "backup-info failed on the backup-found mocked scenario: $(cat /tmp/toolkit_test_backup_found.err)"
+    bad "backup-info failed on the backup-found mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_backup_found.err")"
 fi
 
 if BACKUP_LOCAL_CANDIDATES_OVERRIDE=/nonexistent-dir-xyz BACKUP_MOCK_TIMER_SCENARIO=unrelated BACKUP_MOCK_CRON_SCENARIO=unrelated HOME="$FAKE_HOME2" PATH="$MOCK_PATH" \
-    "${BIN_DIR}/backup-info" >/tmp/toolkit_test_backup_unrelated.out 2>/tmp/toolkit_test_backup_unrelated.err; then
-    if grep -qE '^Discovered sources +0$' /tmp/toolkit_test_backup_unrelated.out; then
+    "${BIN_DIR}/backup-info" >"${TEST_TMP_ROOT}/toolkit_test_backup_unrelated.out" 2>"${TEST_TMP_ROOT}/toolkit_test_backup_unrelated.err"; then
+    if grep -qE '^Discovered sources +0$' "${TEST_TMP_ROOT}/toolkit_test_backup_unrelated.out"; then
         ok "backup-info correctly ignores an unrelated systemd timer and unrelated cron entry (name-based filtering works)"
     else
         bad "backup-info incorrectly counted an unrelated timer/cron entry as a backup source"
     fi
 else
-    bad "backup-info failed on the unrelated-units mocked scenario: $(cat /tmp/toolkit_test_backup_unrelated.err)"
+    bad "backup-info failed on the unrelated-units mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_backup_unrelated.err")"
 fi
 
 if BACKUP_LOCAL_CANDIDATES_OVERRIDE=/nonexistent-dir-xyz BACKUP_MOCK_TIMER_SCENARIO=unavailable BACKUP_MOCK_CRON_SCENARIO=none HOME="$FAKE_HOME2" PATH="$MOCK_PATH" \
-    "${BIN_DIR}/backup-info" >/tmp/toolkit_test_backup_nosystemd.out 2>/tmp/toolkit_test_backup_nosystemd.err; then
+    "${BIN_DIR}/backup-info" >"${TEST_TMP_ROOT}/toolkit_test_backup_nosystemd.out" 2>"${TEST_TMP_ROOT}/toolkit_test_backup_nosystemd.err"; then
     ok "backup-info exits 0 when systemd is unavailable for timer discovery (mocked)"
 else
-    bad "backup-info failed when systemd was unavailable: $(cat /tmp/toolkit_test_backup_nosystemd.err)"
+    bad "backup-info failed when systemd was unavailable: $(cat "${TEST_TMP_ROOT}/toolkit_test_backup_nosystemd.err")"
 fi
 
 FRESH_HOME="$(mktemp -d)"
 mkdir -p "${FRESH_HOME}/backups"
 touch -d '2 hours ago' "${FRESH_HOME}/backups/fresh.tar.gz"
 if BACKUP_LOCAL_CANDIDATES_OVERRIDE=/nonexistent-dir-xyz BACKUP_MOCK_TIMER_SCENARIO=none BACKUP_MOCK_CRON_SCENARIO=none HOME="$FRESH_HOME" PATH="$MOCK_PATH" \
-    "${BIN_DIR}/backup-info" >/tmp/toolkit_test_backup_fresh.out 2>/tmp/toolkit_test_backup_fresh.err; then
-    if grep -qE 'fresh\.tar\.gz +fresh' /tmp/toolkit_test_backup_fresh.out; then
+    "${BIN_DIR}/backup-info" >"${TEST_TMP_ROOT}/toolkit_test_backup_fresh.out" 2>"${TEST_TMP_ROOT}/toolkit_test_backup_fresh.err"; then
+    if grep -qE 'fresh\.tar\.gz +fresh' "${TEST_TMP_ROOT}/toolkit_test_backup_fresh.out"; then
         ok "backup-info classifies a 2h-old backup as fresh (mocked, under the 24h threshold)"
     else
         bad "backup-info did not classify the fresh mocked backup correctly"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_backup_fresh.out | grep -q 'No backup anomalies'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_backup_fresh.out" | grep -q 'No backup anomalies'; then
         ok "backup-info raises no alert for a fresh backup"
     else
         bad "backup-info incorrectly alerted on a fresh backup"
     fi
 else
-    bad "backup-info failed on the fresh-backup mocked scenario: $(cat /tmp/toolkit_test_backup_fresh.err)"
+    bad "backup-info failed on the fresh-backup mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_backup_fresh.err")"
 fi
 rm -rf "$FRESH_HOME"
 
@@ -2281,19 +2290,19 @@ STALE_HOME="$(mktemp -d)"
 mkdir -p "${STALE_HOME}/backups"
 touch -d '3 days ago' "${STALE_HOME}/backups/stale.tar.gz"
 if BACKUP_LOCAL_CANDIDATES_OVERRIDE=/nonexistent-dir-xyz BACKUP_MOCK_TIMER_SCENARIO=none BACKUP_MOCK_CRON_SCENARIO=none HOME="$STALE_HOME" PATH="$MOCK_PATH" \
-    "${BIN_DIR}/backup-info" >/tmp/toolkit_test_backup_stale.out 2>/tmp/toolkit_test_backup_stale.err; then
-    if grep -qE 'stale\.tar\.gz +stale' /tmp/toolkit_test_backup_stale.out; then
+    "${BIN_DIR}/backup-info" >"${TEST_TMP_ROOT}/toolkit_test_backup_stale.out" 2>"${TEST_TMP_ROOT}/toolkit_test_backup_stale.err"; then
+    if grep -qE 'stale\.tar\.gz +stale' "${TEST_TMP_ROOT}/toolkit_test_backup_stale.out"; then
         ok "backup-info classifies a 3-day-old backup as stale (mocked, over the 24h threshold)"
     else
         bad "backup-info did not classify the stale mocked backup correctly"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_backup_stale.out | grep -qE "older than 24h"; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_backup_stale.out" | grep -qE "older than 24h"; then
         ok "backup-info raises a factual stale-backup alert with the documented threshold"
     else
         bad "backup-info did not raise the expected stale-backup alert"
     fi
 else
-    bad "backup-info failed on the stale-backup mocked scenario: $(cat /tmp/toolkit_test_backup_stale.err)"
+    bad "backup-info failed on the stale-backup mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_backup_stale.err")"
 fi
 rm -rf "$STALE_HOME"
 rm -rf "$FAKE_HOME2"
@@ -2308,7 +2317,7 @@ cat >"${MOCK_DIR}/crontab" <<MOCKEOF
 exit 0
 MOCKEOF
 chmod +x "${MOCK_DIR}/crontab"
-PATH="${MOCK_DIR}:${PATH}" "${BIN_DIR}/backup-info" >/tmp/toolkit_test_backup_cronexec.out 2>/tmp/toolkit_test_backup_cronexec.err
+PATH="${MOCK_DIR}:${PATH}" "${BIN_DIR}/backup-info" >"${TEST_TMP_ROOT}/toolkit_test_backup_cronexec.out" 2>"${TEST_TMP_ROOT}/toolkit_test_backup_cronexec.err"
 if [[ ! -e "$CANARY_FILE" ]]; then
     ok "backup-info never executes a command discovered in cron configuration (canary file was not created)"
 else
@@ -2358,27 +2367,27 @@ else
 fi
 
 echo "== info v2: live dashboard has all expected fast sections =="
-if "${BIN_DIR}/info" >/tmp/toolkit_test_infov2_live.out 2>/tmp/toolkit_test_infov2_live.err; then
-    if grep -q '^SERVER$' /tmp/toolkit_test_infov2_live.out && grep -q '^SYSTEM$' /tmp/toolkit_test_infov2_live.out && \
-       grep -q '^GPU$' /tmp/toolkit_test_infov2_live.out && grep -q '^NETWORK$' /tmp/toolkit_test_infov2_live.out && \
-       grep -q '^DOCKER$' /tmp/toolkit_test_infov2_live.out && grep -q '^SERVICES$' /tmp/toolkit_test_infov2_live.out && \
-       grep -q '^SECURITY$' /tmp/toolkit_test_infov2_live.out && grep -q '^ALERTS$' /tmp/toolkit_test_infov2_live.out; then
+if "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_infov2_live.out" 2>"${TEST_TMP_ROOT}/toolkit_test_infov2_live.err"; then
+    if grep -q '^SERVER$' "${TEST_TMP_ROOT}/toolkit_test_infov2_live.out" && grep -q '^SYSTEM$' "${TEST_TMP_ROOT}/toolkit_test_infov2_live.out" && \
+       grep -q '^GPU$' "${TEST_TMP_ROOT}/toolkit_test_infov2_live.out" && grep -q '^NETWORK$' "${TEST_TMP_ROOT}/toolkit_test_infov2_live.out" && \
+       grep -q '^DOCKER$' "${TEST_TMP_ROOT}/toolkit_test_infov2_live.out" && grep -q '^SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_infov2_live.out" && \
+       grep -q '^SECURITY$' "${TEST_TMP_ROOT}/toolkit_test_infov2_live.out" && grep -q '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_infov2_live.out"; then
         ok "info prints SERVER/SYSTEM/GPU/NETWORK/DOCKER/SERVICES/SECURITY/ALERTS sections"
     else
         bad "info is missing one or more expected fast-dashboard sections"
     fi
-    if ! grep -q '^TOP SERVICES$' /tmp/toolkit_test_infov2_live.out; then
+    if ! grep -q '^TOP SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_infov2_live.out"; then
         ok "info no longer includes the slow per-container 'docker stats' TOP SERVICES section"
     else
         bad "info still includes TOP SERVICES (the slow docker-stats section that was removed for performance)"
     fi
 else
-    bad "info exited non-zero: $(cat /tmp/toolkit_test_infov2_live.err)"
+    bad "info exited non-zero: $(cat "${TEST_TMP_ROOT}/toolkit_test_infov2_live.err")"
 fi
 
 echo "== info v2: fast execution path (<2s outer bound) =="
 start_ts=$(date +%s)
-if timeout 5 "${BIN_DIR}/info" >/dev/null 2>/tmp/toolkit_test_infov2_speed.err; then
+if timeout 5 "${BIN_DIR}/info" >/dev/null 2>"${TEST_TMP_ROOT}/toolkit_test_infov2_speed.err"; then
     end_ts=$(date +%s)
     elapsed=$(( end_ts - start_ts ))
     if [[ "$elapsed" -le 2 ]]; then
@@ -2387,7 +2396,7 @@ if timeout 5 "${BIN_DIR}/info" >/dev/null 2>/tmp/toolkit_test_infov2_speed.err; 
         bad "info took ${elapsed}s - slower than the fast-dashboard target"
     fi
 else
-    bad "info did not complete within the outer 5s safety timeout: $(cat /tmp/toolkit_test_infov2_speed.err)"
+    bad "info did not complete within the outer 5s safety timeout: $(cat "${TEST_TMP_ROOT}/toolkit_test_infov2_speed.err")"
 fi
 
 echo "== info v2: no deep-scan/expensive-module invocation (static check) =="
@@ -2531,91 +2540,91 @@ MOCKEOF
 chmod +x "${MOCK_DIR}/systemctl" "${MOCK_DIR}/ps" "${MOCK_DIR}/journalctl" "${MOCK_DIR}/docker" "${MOCK_DIR}/ufw" "${MOCK_DIR}/free" "${MOCK_DIR}/df"
 MOCK_PATH="${MOCK_DIR}:${PATH}"
 
-if INFO_MOCK_SCENARIO=healthy PATH="$MOCK_PATH" "${BIN_DIR}/info" >/tmp/toolkit_test_infov2_healthy.out 2>/tmp/toolkit_test_infov2_healthy.err; then
-    if grep -qE '^Running +2$' /tmp/toolkit_test_infov2_healthy.out; then
+if INFO_MOCK_SCENARIO=healthy PATH="$MOCK_PATH" "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_infov2_healthy.out" 2>"${TEST_TMP_ROOT}/toolkit_test_infov2_healthy.err"; then
+    if grep -qE '^Running +2$' "${TEST_TMP_ROOT}/toolkit_test_infov2_healthy.out"; then
         ok "info SERVICES section reports the mocked running count"
     else
         bad "info SERVICES section did not report the mocked running count correctly"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_infov2_healthy.out | grep -q 'No active alerts'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_infov2_healthy.out" | grep -q 'No active alerts'; then
         ok "info raises no alert for a fully healthy mocked system"
     else
-        bad "info raised an unexpected alert for a healthy mocked system: $(sed -n '/^ALERTS$/,$p' /tmp/toolkit_test_infov2_healthy.out)"
+        bad "info raised an unexpected alert for a healthy mocked system: $(sed -n '/^ALERTS$/,$p' "${TEST_TMP_ROOT}/toolkit_test_infov2_healthy.out")"
     fi
 else
-    bad "info failed on the healthy mocked scenario: $(cat /tmp/toolkit_test_infov2_healthy.err)"
+    bad "info failed on the healthy mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_infov2_healthy.err")"
 fi
 
-if INFO_MOCK_SCENARIO=nosystemd PATH="$MOCK_PATH" "${BIN_DIR}/info" >/tmp/toolkit_test_infov2_nosystemd.out 2>/tmp/toolkit_test_infov2_nosystemd.err; then
-    if grep -A3 '^SERVICES$' /tmp/toolkit_test_infov2_nosystemd.out | grep -qE '^Running +N/A$' && \
-       grep -A3 '^SERVICES$' /tmp/toolkit_test_infov2_nosystemd.out | grep -qE '^Failed +N/A$'; then
+if INFO_MOCK_SCENARIO=nosystemd PATH="$MOCK_PATH" "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_infov2_nosystemd.out" 2>"${TEST_TMP_ROOT}/toolkit_test_infov2_nosystemd.err"; then
+    if grep -A3 '^SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_infov2_nosystemd.out" | grep -qE '^Running +N/A$' && \
+       grep -A3 '^SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_infov2_nosystemd.out" | grep -qE '^Failed +N/A$'; then
         ok "info reports SERVICES as N/A when systemd is unavailable, without crashing"
     else
         bad "info did not report N/A for SERVICES when systemd was unavailable"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_infov2_nosystemd.out | grep -qi 'systemd\|service'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_infov2_nosystemd.out" | grep -qi 'systemd\|service'; then
         bad "info incorrectly alerted merely because systemd was unavailable"
     else
         ok "info does not alert merely because systemd is unavailable (N/A is not a problem signal)"
     fi
 else
-    bad "info failed (nonzero exit) when systemd was unavailable: $(cat /tmp/toolkit_test_infov2_nosystemd.err)"
+    bad "info failed (nonzero exit) when systemd was unavailable: $(cat "${TEST_TMP_ROOT}/toolkit_test_infov2_nosystemd.err")"
 fi
 
-if INFO_MOCK_SCENARIO=failedservices PATH="$MOCK_PATH" "${BIN_DIR}/info" >/tmp/toolkit_test_infov2_failedsvc.out 2>/tmp/toolkit_test_infov2_failedsvc.err; then
-    if grep -qE '^Failed +1$' /tmp/toolkit_test_infov2_failedsvc.out; then
+if INFO_MOCK_SCENARIO=failedservices PATH="$MOCK_PATH" "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_infov2_failedsvc.out" 2>"${TEST_TMP_ROOT}/toolkit_test_infov2_failedsvc.err"; then
+    if grep -qE '^Failed +1$' "${TEST_TMP_ROOT}/toolkit_test_infov2_failedsvc.out"; then
         ok "info SERVICES section reports 1 failed service (mocked)"
     else
         bad "info did not report the mocked failed-service count correctly"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_infov2_failedsvc.out | grep -qE '1 failed systemd service'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_infov2_failedsvc.out" | grep -qE '1 failed systemd service'; then
         ok "info alerts on failed systemd services (reusing services.sh)"
     else
         bad "info did not alert on the mocked failed service"
     fi
 else
-    bad "info failed on the failedservices mocked scenario: $(cat /tmp/toolkit_test_infov2_failedsvc.err)"
+    bad "info failed on the failedservices mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_infov2_failedsvc.err")"
 fi
 
-if INFO_MOCK_SCENARIO=highcpu PATH="$MOCK_PATH" "${BIN_DIR}/info" >/tmp/toolkit_test_infov2_highcpu.out 2>/tmp/toolkit_test_infov2_highcpu.err; then
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_infov2_highcpu.out | grep -qE '1 process\(es\) above 90% CPU'; then
+if INFO_MOCK_SCENARIO=highcpu PATH="$MOCK_PATH" "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_infov2_highcpu.out" 2>"${TEST_TMP_ROOT}/toolkit_test_infov2_highcpu.err"; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_infov2_highcpu.out" | grep -qE '1 process\(es\) above 90% CPU'; then
         ok "info alerts on a mocked process exceeding the documented 90% CPU threshold"
     else
         bad "info did not alert on the mocked high-CPU process"
     fi
 else
-    bad "info failed on the highcpu mocked scenario: $(cat /tmp/toolkit_test_infov2_highcpu.err)"
+    bad "info failed on the highcpu mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_infov2_highcpu.err")"
 fi
 
-if INFO_MOCK_SCENARIO=logerrors PATH="$MOCK_PATH" "${BIN_DIR}/info" >/tmp/toolkit_test_infov2_logerr.out 2>/tmp/toolkit_test_infov2_logerr.err; then
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_infov2_logerr.out | grep -qE '3 error-level journal entries in the last 24h'; then
+if INFO_MOCK_SCENARIO=logerrors PATH="$MOCK_PATH" "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_infov2_logerr.out" 2>"${TEST_TMP_ROOT}/toolkit_test_infov2_logerr.err"; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_infov2_logerr.out" | grep -qE '3 error-level journal entries in the last 24h'; then
         ok "info alerts on mocked error-level journal entries"
     else
         bad "info did not alert on the mocked journal errors"
     fi
 else
-    bad "info failed on the logerrors mocked scenario: $(cat /tmp/toolkit_test_infov2_logerr.err)"
+    bad "info failed on the logerrors mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_infov2_logerr.err")"
 fi
 
-if INFO_MOCK_SCENARIO=ufwinactive PATH="$MOCK_PATH" "${BIN_DIR}/info" >/tmp/toolkit_test_infov2_ufw.out 2>/tmp/toolkit_test_infov2_ufw.err; then
-    if grep -A2 '^SECURITY$' /tmp/toolkit_test_infov2_ufw.out | grep -qE '^UFW +inactive$'; then
+if INFO_MOCK_SCENARIO=ufwinactive PATH="$MOCK_PATH" "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_infov2_ufw.out" 2>"${TEST_TMP_ROOT}/toolkit_test_infov2_ufw.err"; then
+    if grep -A2 '^SECURITY$' "${TEST_TMP_ROOT}/toolkit_test_infov2_ufw.out" | grep -qE '^UFW +inactive$'; then
         ok "info SECURITY section reports mocked UFW inactive status"
     else
         bad "info did not report the mocked UFW inactive status correctly"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_infov2_ufw.out | grep -qi 'UFW firewall is inactive'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_infov2_ufw.out" | grep -qi 'UFW firewall is inactive'; then
         ok "info alerts on inactive UFW (mocked)"
     else
         bad "info did not alert on the mocked inactive UFW"
     fi
 else
-    bad "info failed on the ufwinactive mocked scenario: $(cat /tmp/toolkit_test_infov2_ufw.err)"
+    bad "info failed on the ufwinactive mocked scenario: $(cat "${TEST_TMP_ROOT}/toolkit_test_infov2_ufw.err")"
 fi
 
 SYSTEMCTL_COUNTER="$(mktemp)"
 JOURNALCTL_COUNTER="$(mktemp)"
 if INFO_MOCK_SCENARIO=healthy INFO_MOCK_SYSTEMCTL_COUNTER="$SYSTEMCTL_COUNTER" INFO_MOCK_JOURNALCTL_COUNTER="$JOURNALCTL_COUNTER" \
-    PATH="$MOCK_PATH" "${BIN_DIR}/info" >/tmp/toolkit_test_infov2_calls.out 2>/tmp/toolkit_test_infov2_calls.err; then
+    PATH="$MOCK_PATH" "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_infov2_calls.out" 2>"${TEST_TMP_ROOT}/toolkit_test_infov2_calls.err"; then
     systemctl_calls="$(wc -l <"$SYSTEMCTL_COUNTER" | tr -d '[:space:]')"
     journalctl_calls="$(wc -l <"$JOURNALCTL_COUNTER" | tr -d '[:space:]')"
     if [[ "$systemctl_calls" -le 4 ]]; then
@@ -2629,7 +2638,7 @@ if INFO_MOCK_SCENARIO=healthy INFO_MOCK_SYSTEMCTL_COUNTER="$SYSTEMCTL_COUNTER" I
         bad "info invoked journalctl ${journalctl_calls} times - expected only its single bounded error-count check"
     fi
 else
-    bad "info failed while counting systemctl/journalctl invocations: $(cat /tmp/toolkit_test_infov2_calls.err)"
+    bad "info failed while counting systemctl/journalctl invocations: $(cat "${TEST_TMP_ROOT}/toolkit_test_infov2_calls.err")"
 fi
 rm -f "$SYSTEMCTL_COUNTER" "$JOURNALCTL_COUNTER"
 rm -rf "$MOCK_DIR"
@@ -2665,29 +2674,31 @@ echo "== info works with nvidia-smi mocked unavailable =="
 # Prepend a stub directory whose nvidia-smi always fails, simulating an
 # environment where the tool is present but reports no GPU / is unusable.
 STUB_DIR="$(mktemp -d)"
-trap 'rm -rf "$STUB_DIR"' EXIT
+# Must also remove TEST_TMP_ROOT - a bare `trap ... EXIT` here would
+# otherwise replace (not add to) the top-of-file trap that cleans it up.
+trap 'rm -rf "$STUB_DIR" "$TEST_TMP_ROOT"' EXIT
 printf '#!/bin/sh\nexit 1\n' >"${STUB_DIR}/nvidia-smi"
 chmod +x "${STUB_DIR}/nvidia-smi"
 STUB_PATH="${STUB_DIR}:${PATH}"
 
-if PATH="$STUB_PATH" "${BIN_DIR}/info" >/tmp/toolkit_test_info_nogpu.out 2>/tmp/toolkit_test_info_nogpu.err; then
-    if grep -A2 '^GPU$' /tmp/toolkit_test_info_nogpu.out | grep -q 'N/A'; then
+if PATH="$STUB_PATH" "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_info_nogpu.out" 2>"${TEST_TMP_ROOT}/toolkit_test_info_nogpu.err"; then
+    if grep -A2 '^GPU$' "${TEST_TMP_ROOT}/toolkit_test_info_nogpu.out" | grep -q 'N/A'; then
         ok "info reports GPU: N/A when nvidia-smi is unavailable"
     else
         bad "info did not report GPU: N/A when nvidia-smi was unavailable"
     fi
 else
-    bad "info failed when nvidia-smi was mocked unavailable: $(cat /tmp/toolkit_test_info_nogpu.err)"
+    bad "info failed when nvidia-smi was mocked unavailable: $(cat "${TEST_TMP_ROOT}/toolkit_test_info_nogpu.err")"
 fi
 
-if PATH="$STUB_PATH" "${BIN_DIR}/gpu-info" >/tmp/toolkit_test_gpu_nogpu.out 2>/tmp/toolkit_test_gpu_nogpu.err; then
-    if grep -q 'GPU: N/A' /tmp/toolkit_test_gpu_nogpu.out; then
+if PATH="$STUB_PATH" "${BIN_DIR}/gpu-info" >"${TEST_TMP_ROOT}/toolkit_test_gpu_nogpu.out" 2>"${TEST_TMP_ROOT}/toolkit_test_gpu_nogpu.err"; then
+    if grep -q 'GPU: N/A' "${TEST_TMP_ROOT}/toolkit_test_gpu_nogpu.out"; then
         ok "gpu-info reports GPU: N/A when nvidia-smi is unavailable"
     else
         bad "gpu-info did not print GPU: N/A when nvidia-smi was unavailable"
     fi
 else
-    bad "gpu-info failed when nvidia-smi was mocked unavailable: $(cat /tmp/toolkit_test_gpu_nogpu.err)"
+    bad "gpu-info failed when nvidia-smi was mocked unavailable: $(cat "${TEST_TMP_ROOT}/toolkit_test_gpu_nogpu.err")"
 fi
 rm -rf "$STUB_DIR"
 
@@ -2699,31 +2710,31 @@ printf '#!/bin/sh\nexit 1\n' >"${STUB_DIR}/docker"
 chmod +x "${STUB_DIR}/docker"
 STUB_PATH="${STUB_DIR}:${PATH}"
 
-if PATH="$STUB_PATH" "${BIN_DIR}/info" >/tmp/toolkit_test_info_nodocker.out 2>/tmp/toolkit_test_info_nodocker.err; then
-    if grep -q 'unavailable' /tmp/toolkit_test_info_nodocker.out; then
+if PATH="$STUB_PATH" "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_info_nodocker.out" 2>"${TEST_TMP_ROOT}/toolkit_test_info_nodocker.err"; then
+    if grep -q 'unavailable' "${TEST_TMP_ROOT}/toolkit_test_info_nodocker.out"; then
         ok "info reports Docker unavailable and still exits 0"
     else
         bad "info did not report docker as unavailable"
     fi
-    if grep -qi 'Docker daemon is unavailable' /tmp/toolkit_test_info_nodocker.out; then
+    if grep -qi 'Docker daemon is unavailable' "${TEST_TMP_ROOT}/toolkit_test_info_nodocker.out"; then
         ok "info raises an alert for unavailable Docker daemon"
     else
         bad "info did not raise an alert for unavailable Docker daemon"
     fi
 else
-    bad "info failed when docker was mocked unavailable: $(cat /tmp/toolkit_test_info_nodocker.err)"
+    bad "info failed when docker was mocked unavailable: $(cat "${TEST_TMP_ROOT}/toolkit_test_info_nodocker.err")"
 fi
 
 echo "== docker-info handles Docker unavailable =="
-if PATH="$STUB_PATH" "${BIN_DIR}/docker-info" >/tmp/toolkit_test_dockerinfo_nodocker.out 2>/tmp/toolkit_test_dockerinfo_nodocker.err; then
-    if grep -qi 'unavailable' /tmp/toolkit_test_dockerinfo_nodocker.out && \
-       grep -qi 'Docker daemon unavailable' /tmp/toolkit_test_dockerinfo_nodocker.out; then
+if PATH="$STUB_PATH" "${BIN_DIR}/docker-info" >"${TEST_TMP_ROOT}/toolkit_test_dockerinfo_nodocker.out" 2>"${TEST_TMP_ROOT}/toolkit_test_dockerinfo_nodocker.err"; then
+    if grep -qi 'unavailable' "${TEST_TMP_ROOT}/toolkit_test_dockerinfo_nodocker.out" && \
+       grep -qi 'Docker daemon unavailable' "${TEST_TMP_ROOT}/toolkit_test_dockerinfo_nodocker.out"; then
         ok "docker-info reports Docker unavailable, alerts, and still exits 0"
     else
         bad "docker-info did not report/alert on unavailable Docker daemon"
     fi
 else
-    bad "docker-info failed when docker was mocked unavailable: $(cat /tmp/toolkit_test_dockerinfo_nodocker.err)"
+    bad "docker-info failed when docker was mocked unavailable: $(cat "${TEST_TMP_ROOT}/toolkit_test_dockerinfo_nodocker.err")"
 fi
 rm -rf "$STUB_DIR"
 
@@ -2795,40 +2806,40 @@ MOCKEOF
 chmod +x "${MOCK_DIR}/docker"
 MOCK_PATH="${MOCK_DIR}:${PATH}"
 
-if DOCKER_MOCK_SCENARIO=zero PATH="$MOCK_PATH" "${BIN_DIR}/docker-info" >/tmp/toolkit_test_dockerinfo_zero.out 2>/tmp/toolkit_test_dockerinfo_zero.err; then
-    if grep -A2 '^CONTAINERS$' /tmp/toolkit_test_dockerinfo_zero.out | grep -q 'None'; then
+if DOCKER_MOCK_SCENARIO=zero PATH="$MOCK_PATH" "${BIN_DIR}/docker-info" >"${TEST_TMP_ROOT}/toolkit_test_dockerinfo_zero.out" 2>"${TEST_TMP_ROOT}/toolkit_test_dockerinfo_zero.err"; then
+    if grep -A2 '^CONTAINERS$' "${TEST_TMP_ROOT}/toolkit_test_dockerinfo_zero.out" | grep -q 'None'; then
         ok "docker-info shows 'None' for zero containers"
     else
         bad "docker-info did not show 'None' in CONTAINERS with zero containers"
     fi
-    if grep -A2 '^RESTARTS$' /tmp/toolkit_test_dockerinfo_zero.out | grep -q 'None'; then
+    if grep -A2 '^RESTARTS$' "${TEST_TMP_ROOT}/toolkit_test_dockerinfo_zero.out" | grep -q 'None'; then
         ok "docker-info shows 'None' restarts with zero containers"
     else
         bad "docker-info did not show 'None' in RESTARTS with zero containers"
     fi
 else
-    bad "docker-info failed with zero containers: $(cat /tmp/toolkit_test_dockerinfo_zero.err)"
+    bad "docker-info failed with zero containers: $(cat "${TEST_TMP_ROOT}/toolkit_test_dockerinfo_zero.err")"
 fi
 
 echo "== docker-info handles containers without healthchecks (mocked) =="
-if DOCKER_MOCK_SCENARIO=unhealthy PATH="$MOCK_PATH" "${BIN_DIR}/docker-info" >/tmp/toolkit_test_dockerinfo_unhealthy.out 2>/tmp/toolkit_test_dockerinfo_unhealthy.err; then
+if DOCKER_MOCK_SCENARIO=unhealthy PATH="$MOCK_PATH" "${BIN_DIR}/docker-info" >"${TEST_TMP_ROOT}/toolkit_test_dockerinfo_unhealthy.out" 2>"${TEST_TMP_ROOT}/toolkit_test_dockerinfo_unhealthy.err"; then
     ok "docker-info exits 0 with a mocked unhealthy container present"
 else
-    bad "docker-info failed on unhealthy-container mock: $(cat /tmp/toolkit_test_dockerinfo_unhealthy.err)"
+    bad "docker-info failed on unhealthy-container mock: $(cat "${TEST_TMP_ROOT}/toolkit_test_dockerinfo_unhealthy.err")"
 fi
 
 echo "== docker-info handles unhealthy containers (mocked) =="
-if grep -q 'svc-bad' /tmp/toolkit_test_dockerinfo_unhealthy.out && grep -q 'unhealthy' /tmp/toolkit_test_dockerinfo_unhealthy.out; then
+if grep -q 'svc-bad' "${TEST_TMP_ROOT}/toolkit_test_dockerinfo_unhealthy.out" && grep -q 'unhealthy' "${TEST_TMP_ROOT}/toolkit_test_dockerinfo_unhealthy.out"; then
     ok "docker-info lists the unhealthy container in CONTAINERS"
 else
     bad "docker-info did not list the mocked unhealthy container"
 fi
-if grep -A5 '^HEALTH$' /tmp/toolkit_test_dockerinfo_unhealthy.out | grep -qE 'Unhealthy +1$'; then
+if grep -A5 '^HEALTH$' "${TEST_TMP_ROOT}/toolkit_test_dockerinfo_unhealthy.out" | grep -qE 'Unhealthy +1$'; then
     ok "docker-info HEALTH section reflects the unhealthy container"
 else
     bad "docker-info HEALTH section missing unhealthy count"
 fi
-if grep -A5 '^ALERTS$' /tmp/toolkit_test_dockerinfo_unhealthy.out | grep -qi 'unhealthy'; then
+if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_dockerinfo_unhealthy.out" | grep -qi 'unhealthy'; then
     ok "docker-info raises an alert for the unhealthy container"
 else
     bad "docker-info did not alert on the unhealthy container"
@@ -2851,19 +2862,19 @@ MOCKEOF
 chmod +x "${MOCK_DIR}/ip"
 
 if REAL_IP="$(command -v ip)" NETWORK_MOCK_NO_ROUTE=1 PATH="${MOCK_DIR}:${PATH}" \
-    "${BIN_DIR}/network-info" >/tmp/toolkit_test_network_noroute.out 2>/tmp/toolkit_test_network_noroute.err; then
-    if grep -qE '^Default route +FAIL$' /tmp/toolkit_test_network_noroute.out; then
+    "${BIN_DIR}/network-info" >"${TEST_TMP_ROOT}/toolkit_test_network_noroute.out" 2>"${TEST_TMP_ROOT}/toolkit_test_network_noroute.err"; then
+    if grep -qE '^Default route +FAIL$' "${TEST_TMP_ROOT}/toolkit_test_network_noroute.out"; then
         ok "network-info reports Default route: FAIL with no default route"
     else
         bad "network-info did not report Default route: FAIL"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_network_noroute.out | grep -qi 'no default route'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_network_noroute.out" | grep -qi 'no default route'; then
         ok "network-info alerts on missing default route"
     else
         bad "network-info did not alert on missing default route"
     fi
 else
-    bad "network-info failed with no default route mocked: $(cat /tmp/toolkit_test_network_noroute.err)"
+    bad "network-info failed with no default route mocked: $(cat "${TEST_TMP_ROOT}/toolkit_test_network_noroute.err")"
 fi
 rm -rf "$MOCK_DIR"
 
@@ -2873,31 +2884,31 @@ printf '#!/bin/sh\nexit 1\n' >"${STUB_DIR}/getent"
 printf '#!/bin/sh\nexit 1\n' >"${STUB_DIR}/ping"
 chmod +x "${STUB_DIR}/getent" "${STUB_DIR}/ping"
 
-if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/network-info" >/tmp/toolkit_test_network_noconn.out 2>/tmp/toolkit_test_network_noconn.err; then
+if PATH="${STUB_DIR}:${PATH}" "${BIN_DIR}/network-info" >"${TEST_TMP_ROOT}/toolkit_test_network_noconn.out" 2>"${TEST_TMP_ROOT}/toolkit_test_network_noconn.err"; then
     ok "network-info exits 0 with DNS and ping unavailable"
-    if grep -qE '^Default route +OK$' /tmp/toolkit_test_network_noconn.out; then
+    if grep -qE '^Default route +OK$' "${TEST_TMP_ROOT}/toolkit_test_network_noconn.out"; then
         ok "network-info still reports Default route: OK (unaffected by DNS/ping failure)"
     else
         bad "network-info's default-route check was wrongly affected by DNS/ping failure"
     fi
-    if grep -qE '^DNS +FAIL$' /tmp/toolkit_test_network_noconn.out; then
+    if grep -qE '^DNS +FAIL$' "${TEST_TMP_ROOT}/toolkit_test_network_noconn.out"; then
         ok "network-info reports DNS: FAIL"
     else
         bad "network-info did not report DNS: FAIL"
     fi
-    if grep -qE '^Internet +FAIL$' /tmp/toolkit_test_network_noconn.out; then
+    if grep -qE '^Internet +FAIL$' "${TEST_TMP_ROOT}/toolkit_test_network_noconn.out"; then
         ok "network-info reports Internet: FAIL"
     else
         bad "network-info did not report Internet: FAIL"
     fi
-    if grep -A5 '^ALERTS$' /tmp/toolkit_test_network_noconn.out | grep -qi 'DNS resolution failed' && \
-       grep -A5 '^ALERTS$' /tmp/toolkit_test_network_noconn.out | grep -qi 'external connectivity check failed'; then
+    if grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_network_noconn.out" | grep -qi 'DNS resolution failed' && \
+       grep -A5 '^ALERTS$' "${TEST_TMP_ROOT}/toolkit_test_network_noconn.out" | grep -qi 'external connectivity check failed'; then
         ok "network-info raises distinct alerts for DNS failure and external connectivity failure"
     else
         bad "network-info did not raise distinct DNS/connectivity alerts"
     fi
 else
-    bad "network-info failed with DNS/ping mocked unavailable: $(cat /tmp/toolkit_test_network_noconn.err)"
+    bad "network-info failed with DNS/ping mocked unavailable: $(cat "${TEST_TMP_ROOT}/toolkit_test_network_noconn.err")"
 fi
 rm -rf "$STUB_DIR"
 
@@ -2932,46 +2943,46 @@ MOCKEOF
 chmod +x "${MOCK_DIR}/ss"
 MOCK_PATH="${MOCK_DIR}:${PATH}"
 
-if NETWORK_MOCK_SS_SCENARIO=ports PATH="$MOCK_PATH" "${BIN_DIR}/network-info" >/tmp/toolkit_test_network_ports.out 2>/tmp/toolkit_test_network_ports.err; then
-    if awk '/^PUBLIC$/,/^$/' /tmp/toolkit_test_network_ports.out | grep -qE '^0\.0\.0\.0 +22'; then
+if NETWORK_MOCK_SS_SCENARIO=ports PATH="$MOCK_PATH" "${BIN_DIR}/network-info" >"${TEST_TMP_ROOT}/toolkit_test_network_ports.out" 2>"${TEST_TMP_ROOT}/toolkit_test_network_ports.err"; then
+    if awk '/^PUBLIC$/,/^$/' "${TEST_TMP_ROOT}/toolkit_test_network_ports.out" | grep -qE '^0\.0\.0\.0 +22'; then
         ok "network-info categorizes 0.0.0.0 bind as PUBLIC"
     else
         bad "network-info did not list 0.0.0.0:22 under PUBLIC"
     fi
-    if awk '/^LOCAL$/,0' /tmp/toolkit_test_network_ports.out | grep -qE '^127\.0\.0\.1 +5432 +postgres'; then
+    if awk '/^LOCAL$/,0' "${TEST_TMP_ROOT}/toolkit_test_network_ports.out" | grep -qE '^127\.0\.0\.1 +5432 +postgres'; then
         ok "network-info categorizes 127.0.0.1 bind as LOCAL and extracts the process name"
     else
         bad "network-info did not list 127.0.0.1:5432 (postgres) under LOCAL"
     fi
-    if grep -qE '^\[::1\] +25' /tmp/toolkit_test_network_ports.out; then
+    if grep -qE '^\[::1\] +25' "${TEST_TMP_ROOT}/toolkit_test_network_ports.out"; then
         ok "network-info preserves IPv6 loopback bind address"
     else
         bad "network-info did not show the [::1]:25 listener"
     fi
-    if grep -qE '^LISTEN +1$' /tmp/toolkit_test_network_ports.out && grep -qE '^ESTABLISHED +1$' /tmp/toolkit_test_network_ports.out; then
+    if grep -qE '^LISTEN +1$' "${TEST_TMP_ROOT}/toolkit_test_network_ports.out" && grep -qE '^ESTABLISHED +1$' "${TEST_TMP_ROOT}/toolkit_test_network_ports.out"; then
         ok "network-info CONNECTIONS section summarizes mocked TCP states correctly"
     else
         bad "network-info CONNECTIONS section did not reflect the mocked states"
     fi
 else
-    bad "network-info failed with mocked ss ports data: $(cat /tmp/toolkit_test_network_ports.err)"
+    bad "network-info failed with mocked ss ports data: $(cat "${TEST_TMP_ROOT}/toolkit_test_network_ports.err")"
 fi
 
 echo "== network-info handles empty connection/listening sections without crashing =="
-if NETWORK_MOCK_SS_SCENARIO=empty PATH="$MOCK_PATH" "${BIN_DIR}/network-info" >/tmp/toolkit_test_network_emptyss.out 2>/tmp/toolkit_test_network_emptyss.err; then
+if NETWORK_MOCK_SS_SCENARIO=empty PATH="$MOCK_PATH" "${BIN_DIR}/network-info" >"${TEST_TMP_ROOT}/toolkit_test_network_emptyss.out" 2>"${TEST_TMP_ROOT}/toolkit_test_network_emptyss.err"; then
     ok "network-info exits 0 with no listening ports / no connections"
-    if grep -A2 '^LISTENING PORTS$' /tmp/toolkit_test_network_emptyss.out | grep -q 'None'; then
+    if grep -A2 '^LISTENING PORTS$' "${TEST_TMP_ROOT}/toolkit_test_network_emptyss.out" | grep -q 'None'; then
         ok "network-info shows 'None' for empty LISTENING PORTS"
     else
         bad "network-info did not show 'None' for empty LISTENING PORTS"
     fi
-    if grep -A2 '^CONNECTIONS$' /tmp/toolkit_test_network_emptyss.out | grep -q 'None'; then
+    if grep -A2 '^CONNECTIONS$' "${TEST_TMP_ROOT}/toolkit_test_network_emptyss.out" | grep -q 'None'; then
         ok "network-info shows 'None' for empty CONNECTIONS"
     else
         bad "network-info did not show 'None' for empty CONNECTIONS"
     fi
 else
-    bad "network-info failed with empty ss output: $(cat /tmp/toolkit_test_network_emptyss.err)"
+    bad "network-info failed with empty ss output: $(cat "${TEST_TMP_ROOT}/toolkit_test_network_emptyss.err")"
 fi
 rm -rf "$MOCK_DIR"
 
@@ -3001,11 +3012,11 @@ else
     bad "config_path default was '$default_path', expected '${HOME}/.config/server-toolkit/config'"
 fi
 
-override_path="$(TOOLKIT_CONFIG_DIR=/tmp/toolkit-config-override-test bash -c '
+override_path="$(TOOLKIT_CONFIG_DIR="${TEST_TMP_ROOT}/toolkit-config-override-test" bash -c '
     source "'"${LIB_DIR}"'/config.sh"
     config_path
 ')"
-if [[ "$override_path" == "/tmp/toolkit-config-override-test/config" ]]; then
+if [[ "$override_path" == "${TEST_TMP_ROOT}/toolkit-config-override-test/config" ]]; then
     ok "TOOLKIT_CONFIG_DIR overrides config_path"
 else
     bad "TOOLKIT_CONFIG_DIR override did not take effect (got '$override_path')"
@@ -3202,12 +3213,19 @@ fi
 chmod 600 "${CFG_TMP}/unsafe/config"
 
 echo "== configuration engine: injected shell payloads are never executed =="
-rm -f /tmp/config-pwned /tmp/config-pwned-backtick /tmp/config-pwned-semicolon
+CONFIG_PWNED="${TEST_TMP_ROOT}/config-pwned"
+CONFIG_PWNED_BACKTICK="${TEST_TMP_ROOT}/config-pwned-backtick"
+CONFIG_PWNED_SEMICOLON="${TEST_TMP_ROOT}/config-pwned-semicolon"
+rm -f "$CONFIG_PWNED" "$CONFIG_PWNED_BACKTICK" "$CONFIG_PWNED_SEMICOLON"
 mkdir -p "${CFG_TMP}/injection"
-cat > "${CFG_TMP}/injection/config" <<'EOF'
-EVIL_SUBSHELL=$(touch /tmp/config-pwned)
-EVIL_BACKTICK=`touch /tmp/config-pwned-backtick`
-RAM_ALERT_PCT=90; touch /tmp/config-pwned-semicolon
+# Not a quoted (<<'EOF') heredoc here - ${...} below must expand to this
+# run's real TEST_TMP_ROOT path, while $(...)/`...` must NOT be expanded
+# by this construction step (that's the entire payload under test), so
+# each is escaped with a literal backslash instead.
+cat > "${CFG_TMP}/injection/config" <<EOF
+EVIL_SUBSHELL=\$(touch ${CONFIG_PWNED})
+EVIL_BACKTICK=\`touch ${CONFIG_PWNED_BACKTICK}\`
+RAM_ALERT_PCT=90; touch ${CONFIG_PWNED_SEMICOLON}
 EOF
 chmod 600 "${CFG_TMP}/injection/config"
 literal="$(TOOLKIT_CONFIG_DIR="${CFG_TMP}/injection" bash -c '
@@ -3218,17 +3236,17 @@ TOOLKIT_CONFIG_DIR="${CFG_TMP}/injection" bash -c '
     source "'"${LIB_DIR}"'/config.sh"
     config_get RAM_ALERT_PCT 90 percentage
 ' >/dev/null 2>&1
-if [[ ! -e /tmp/config-pwned && ! -e /tmp/config-pwned-backtick && ! -e /tmp/config-pwned-semicolon ]]; then
+if [[ ! -e "$CONFIG_PWNED" && ! -e "$CONFIG_PWNED_BACKTICK" && ! -e "$CONFIG_PWNED_SEMICOLON" ]]; then
     ok "config loader never executes shell payloads embedded in values (\$(), backticks, ;)"
 else
-    bad "SECURITY: a config value was executed as a shell command (found: $(ls /tmp/config-pwned* 2>/dev/null))"
+    bad "SECURITY: a config value was executed as a shell command (found: $(ls "${TEST_TMP_ROOT}"/config-pwned* 2>/dev/null))"
 fi
-if [[ "$literal" == '$(touch /tmp/config-pwned)' ]]; then
+if [[ "$literal" == "\$(touch ${CONFIG_PWNED})" ]]; then
     ok "a \$(...) payload is stored and returned as inert literal text, not executed"
 else
     bad "a \$(...) payload was not preserved as literal text (got '$literal')"
 fi
-rm -f /tmp/config-pwned /tmp/config-pwned-backtick /tmp/config-pwned-semicolon
+rm -f "$CONFIG_PWNED" "$CONFIG_PWNED_BACKTICK" "$CONFIG_PWNED_SEMICOLON"
 
 echo "== configuration engine: pipe and background-execution payloads are never executed =="
 mkdir -p "${CFG_TMP}/pipeamp"
@@ -3296,14 +3314,14 @@ CFG_TMP2="$(mktemp -d)"
 mkdir -p "${CFG_TMP2}/info-low"
 printf 'RAM_ALERT_PCT=1\n' > "${CFG_TMP2}/info-low/config"
 chmod 600 "${CFG_TMP2}/info-low/config"
-if TOOLKIT_CONFIG_DIR="${CFG_TMP2}/info-low" "${BIN_DIR}/info" >/tmp/toolkit_test_info_lowram.out 2>/tmp/toolkit_test_info_lowram.err; then
-    if grep -q "RAM usage is" /tmp/toolkit_test_info_lowram.out; then
+if TOOLKIT_CONFIG_DIR="${CFG_TMP2}/info-low" "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_info_lowram.out" 2>"${TEST_TMP_ROOT}/toolkit_test_info_lowram.err"; then
+    if grep -q "RAM usage is" "${TEST_TMP_ROOT}/toolkit_test_info_lowram.out"; then
         ok "info fires a RAM alert when the configured threshold (1%) is below actual usage"
     else
         bad "info did not fire a RAM alert with RAM_ALERT_PCT=1 (actual RAM usage should always exceed 1%)"
     fi
 else
-    bad "info exited non-zero with a config file present: $(cat /tmp/toolkit_test_info_lowram.err)"
+    bad "info exited non-zero with a config file present: $(cat "${TEST_TMP_ROOT}/toolkit_test_info_lowram.err")"
 fi
 
 echo "== configuration engine: info's default RAM alert threshold is unchanged without a config file =="
@@ -3313,18 +3331,18 @@ actual_ram_pct="$(bash -c '
     read -r _ _ pct <<<"$(get_ram_stats)"
     printf "%s" "${pct%\%}"
 ')"
-if TOOLKIT_CONFIG_DIR="${CFG_TMP2}/does-not-exist" "${BIN_DIR}/info" >/tmp/toolkit_test_info_nocfg.out 2>/tmp/toolkit_test_info_nocfg.err; then
+if TOOLKIT_CONFIG_DIR="${CFG_TMP2}/does-not-exist" "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_info_nocfg.out" 2>"${TEST_TMP_ROOT}/toolkit_test_info_nocfg.err"; then
     expect_alert=0
     [[ "$actual_ram_pct" =~ ^[0-9]+$ ]] && [[ "$actual_ram_pct" -ge 90 ]] && expect_alert=1
     found_alert=0
-    grep -q "RAM usage is" /tmp/toolkit_test_info_nocfg.out && found_alert=1
+    grep -q "RAM usage is" "${TEST_TMP_ROOT}/toolkit_test_info_nocfg.out" && found_alert=1
     if [[ "$expect_alert" -eq "$found_alert" ]]; then
         ok "info's default RAM alert threshold (90%) is unchanged without a config file"
     else
         bad "info's default RAM alert behavior changed (actual RAM ${actual_ram_pct}%, alert present: ${found_alert})"
     fi
 else
-    bad "info exited non-zero with no config file: $(cat /tmp/toolkit_test_info_nocfg.err)"
+    bad "info exited non-zero with no config file: $(cat "${TEST_TMP_ROOT}/toolkit_test_info_nocfg.err")"
 fi
 rm -rf "$CFG_TMP2"
 
@@ -3522,11 +3540,14 @@ result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP}/symlink" bash -c '
     || bad "a broken symlink broke discovery (got: '$result')"
 
 echo "== custom modules: reading a module file never executes anything (parser-only canary) =="
-rm -f /tmp/module-pwned-parseonly
+MODULE_PWNED_PARSEONLY="${TEST_TMP_ROOT}/module-pwned-parseonly"
+rm -f "$MODULE_PWNED_PARSEONLY"
 mkdir -p "${MOD_TMP}/canary/modules"
-cat > "${MOD_TMP}/canary/modules/evil.conf" <<'EOF'
+# Unquoted heredoc so ${MODULE_PWNED_PARSEONLY} expands, with \$( escaped
+# so the $(...) payload itself is NOT evaluated while writing this file.
+cat > "${MOD_TMP}/canary/modules/evil.conf" <<EOF
 ENABLED=false
-COMMAND=$(touch /tmp/module-pwned-parseonly)
+COMMAND=\$(touch ${MODULE_PWNED_PARSEONLY})
 EOF
 chmod 600 "${MOD_TMP}/canary/modules/evil.conf"
 TOOLKIT_CONFIG_DIR="${MOD_TMP}/canary" bash -c '
@@ -3536,12 +3557,12 @@ TOOLKIT_CONFIG_DIR="${MOD_TMP}/canary" bash -c '
     declare -A fields=()
     read_module_file "'"${MOD_TMP}"'/canary/modules/evil.conf" fields
 ' >/dev/null 2>&1
-if [[ ! -e /tmp/module-pwned-parseonly ]]; then
+if [[ ! -e "$MODULE_PWNED_PARSEONLY" ]]; then
     ok "discovering and reading a module file never executes a \$(...) payload in its COMMAND field"
 else
     bad "SECURITY: parsing a module file executed a shell payload"
 fi
-rm -f /tmp/module-pwned-parseonly
+rm -f "$MODULE_PWNED_PARSEONLY"
 
 echo "== custom modules: no eval, no source of module files (static check) =="
 if ! grep -qE '\beval\b' "${TOOLKIT_DIR}/lib/modules.sh"; then
@@ -3559,9 +3580,10 @@ rm -rf "$MOD_TMP"
 
 echo "== custom modules: disabled module never executes =="
 MOD_TMP2="$(mktemp -d)"
-rm -f /tmp/module-pwned-disabled
+MODULE_PWNED_DISABLED="${TEST_TMP_ROOT}/module-pwned-disabled"
+rm -f "$MODULE_PWNED_DISABLED"
 mkdir -p "${MOD_TMP2}/disabled/modules"
-printf 'ENABLED=false\nCOMMAND=touch /tmp/module-pwned-disabled\n' > "${MOD_TMP2}/disabled/modules/off.conf"
+printf 'ENABLED=false\nCOMMAND=touch %s\n' "$MODULE_PWNED_DISABLED" > "${MOD_TMP2}/disabled/modules/off.conf"
 chmod 600 "${MOD_TMP2}/disabled/modules/off.conf"
 result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/disabled" bash -c '
     source "'"${LIB_DIR}"'/common.sh"
@@ -3570,16 +3592,17 @@ result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/disabled" bash -c '
     source "'"${LIB_DIR}"'/modules.sh"
     run_module off
 ')"
-if [[ ! -e /tmp/module-pwned-disabled ]] && [[ "$result" == "${STATUS_OK:-OK}"$'\t'*"disabled"* || "$result" == *"disabled"* ]]; then
+if [[ ! -e "$MODULE_PWNED_DISABLED" ]] && [[ "$result" == "${STATUS_OK:-OK}"$'\t'*"disabled"* || "$result" == *"disabled"* ]]; then
     ok "a disabled module never runs its COMMAND"
 else
     bad "SECURITY: a disabled module's COMMAND executed, or status was wrong (result: '$result')"
 fi
-rm -f /tmp/module-pwned-disabled
+rm -f "$MODULE_PWNED_DISABLED"
 
 echo "== custom modules: enabled module executes =="
+MODULE_PWNED_EXECUTED="${TEST_TMP_ROOT}/module-pwned-executed"
 mkdir -p "${MOD_TMP2}/enabled/modules"
-printf 'ENABLED=true\nCOMMAND=touch /tmp/module-pwned-executed && echo did-run\n' > "${MOD_TMP2}/enabled/modules/on.conf"
+printf 'ENABLED=true\nCOMMAND=touch %s && echo did-run\n' "$MODULE_PWNED_EXECUTED" > "${MOD_TMP2}/enabled/modules/on.conf"
 chmod 600 "${MOD_TMP2}/enabled/modules/on.conf"
 result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/enabled" bash -c '
     source "'"${LIB_DIR}"'/common.sh"
@@ -3588,12 +3611,12 @@ result="$(TOOLKIT_CONFIG_DIR="${MOD_TMP2}/enabled" bash -c '
     source "'"${LIB_DIR}"'/modules.sh"
     run_module on
 ')"
-if [[ -e /tmp/module-pwned-executed ]] && [[ "$result" == *"did-run"* ]]; then
+if [[ -e "$MODULE_PWNED_EXECUTED" ]] && [[ "$result" == *"did-run"* ]]; then
     ok "an explicitly enabled module runs its COMMAND and captures its output"
 else
     bad "an enabled module did not execute correctly (result: '$result')"
 fi
-rm -f /tmp/module-pwned-executed
+rm -f "$MODULE_PWNED_EXECUTED"
 
 echo "== custom modules: module timeout =="
 mkdir -p "${MOD_TMP2}/timeout/modules"
@@ -3914,31 +3937,31 @@ printf 'CUSTOM_MODULES_ENABLED=true\n' > "${MOD_TMP3}/on/config"
 chmod 600 "${MOD_TMP3}/on/config"
 printf 'ENABLED=true\nCOMMAND=exit 2\n' > "${MOD_TMP3}/on/modules/broken.conf"
 chmod 600 "${MOD_TMP3}/on/modules/broken.conf"
-if TOOLKIT_CONFIG_DIR="${MOD_TMP3}/on" "${BIN_DIR}/info" >/tmp/toolkit_test_info_modules.out 2>/tmp/toolkit_test_info_modules.err; then
-    alerts_section="$(sed -n '/^ALERTS$/,$p' /tmp/toolkit_test_info_modules.out)"
-    if grep -q "CUSTOM MODULES" /tmp/toolkit_test_info_modules.out && \
-       grep -q "broken" /tmp/toolkit_test_info_modules.out && \
+if TOOLKIT_CONFIG_DIR="${MOD_TMP3}/on" "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_info_modules.out" 2>"${TEST_TMP_ROOT}/toolkit_test_info_modules.err"; then
+    alerts_section="$(sed -n '/^ALERTS$/,$p' "${TEST_TMP_ROOT}/toolkit_test_info_modules.out")"
+    if grep -q "CUSTOM MODULES" "${TEST_TMP_ROOT}/toolkit_test_info_modules.out" && \
+       grep -q "broken" "${TEST_TMP_ROOT}/toolkit_test_info_modules.out" && \
        grep -q "non-zero (2)" <<<"$alerts_section"; then
         ok "info runs an enabled custom module and surfaces its failure as an alert"
     else
-        bad "info did not correctly show the custom module or its alert: $(cat /tmp/toolkit_test_info_modules.out)"
+        bad "info did not correctly show the custom module or its alert: $(cat "${TEST_TMP_ROOT}/toolkit_test_info_modules.out")"
     fi
 else
-    bad "info exited non-zero with custom modules enabled: $(cat /tmp/toolkit_test_info_modules.err)"
+    bad "info exited non-zero with custom modules enabled: $(cat "${TEST_TMP_ROOT}/toolkit_test_info_modules.err")"
 fi
 
 echo "== custom modules: info with the feature on but zero module files shows a clean empty state =="
 mkdir -p "${MOD_TMP3}/on-empty/modules"
 printf 'CUSTOM_MODULES_ENABLED=true\n' > "${MOD_TMP3}/on-empty/config"
 chmod 600 "${MOD_TMP3}/on-empty/config"
-if TOOLKIT_CONFIG_DIR="${MOD_TMP3}/on-empty" "${BIN_DIR}/info" >/tmp/toolkit_test_info_emptymodules.out 2>/tmp/toolkit_test_info_emptymodules.err; then
-    if grep -q "No custom modules configured" /tmp/toolkit_test_info_emptymodules.out; then
+if TOOLKIT_CONFIG_DIR="${MOD_TMP3}/on-empty" "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_info_emptymodules.out" 2>"${TEST_TMP_ROOT}/toolkit_test_info_emptymodules.err"; then
+    if grep -q "No custom modules configured" "${TEST_TMP_ROOT}/toolkit_test_info_emptymodules.out"; then
         ok "info shows a clean empty state when the feature is on but no modules exist"
     else
         bad "info did not show the expected empty-state message"
     fi
 else
-    bad "info exited non-zero with the feature on and no modules: $(cat /tmp/toolkit_test_info_emptymodules.err)"
+    bad "info exited non-zero with the feature on and no modules: $(cat "${TEST_TMP_ROOT}/toolkit_test_info_emptymodules.err")"
 fi
 
 echo "== custom modules: a slow module's timeout does not hang the whole dashboard =="
@@ -4043,17 +4066,17 @@ for cli_cmd in "${!CLI_EXPECTED_HEADERS[@]}"; do
 done
 
 echo "== cli: unknown command =="
-"${BIN_DIR}/server-toolkit" banana >/tmp/toolkit_test_cli_unknown.out 2>/tmp/toolkit_test_cli_unknown.err
+"${BIN_DIR}/server-toolkit" banana >"${TEST_TMP_ROOT}/toolkit_test_cli_unknown.out" 2>"${TEST_TMP_ROOT}/toolkit_test_cli_unknown.err"
 rc=$?
-if [[ "$rc" -ne 0 ]] && grep -q 'unknown command' /tmp/toolkit_test_cli_unknown.err && grep -q 'help' /tmp/toolkit_test_cli_unknown.err; then
+if [[ "$rc" -ne 0 ]] && grep -q 'unknown command' "${TEST_TMP_ROOT}/toolkit_test_cli_unknown.err" && grep -q 'help' "${TEST_TMP_ROOT}/toolkit_test_cli_unknown.err"; then
     ok "server-toolkit banana exits non-zero with a clear message pointing at help (rc=$rc)"
 else
-    bad "server-toolkit banana did not fail cleanly (rc=$rc, stderr: $(cat /tmp/toolkit_test_cli_unknown.err))"
+    bad "server-toolkit banana did not fail cleanly (rc=$rc, stderr: $(cat "${TEST_TMP_ROOT}/toolkit_test_cli_unknown.err"))"
 fi
-if ! grep -qiE 'traceback|line [0-9]+:.*unbound|syntax error' /tmp/toolkit_test_cli_unknown.err; then
+if ! grep -qiE 'traceback|line [0-9]+:.*unbound|syntax error' "${TEST_TMP_ROOT}/toolkit_test_cli_unknown.err"; then
     ok "server-toolkit banana's error output contains no raw Bash internal error text"
 else
-    bad "server-toolkit banana leaked a raw Bash internal error: $(cat /tmp/toolkit_test_cli_unknown.err)"
+    bad "server-toolkit banana leaked a raw Bash internal error: $(cat "${TEST_TMP_ROOT}/toolkit_test_cli_unknown.err")"
 fi
 
 echo "== cli: unknown positional argument to a known command is passed through deterministically =="
@@ -4065,31 +4088,33 @@ else
 fi
 
 echo "== cli: injection payload is never interpreted as shell code =="
-rm -f /tmp/cli-pwned
-"${BIN_DIR}/server-toolkit" '; touch /tmp/cli-pwned' >/tmp/toolkit_test_cli_injection.out 2>/tmp/toolkit_test_cli_injection.err
+CLI_PWNED="${TEST_TMP_ROOT}/cli-pwned"
+rm -f "$CLI_PWNED"
+"${BIN_DIR}/server-toolkit" "; touch $CLI_PWNED" >"${TEST_TMP_ROOT}/toolkit_test_cli_injection.out" 2>"${TEST_TMP_ROOT}/toolkit_test_cli_injection.err"
 rc=$?
-if [[ ! -e /tmp/cli-pwned ]] && [[ "$rc" -eq 127 ]] && grep -qF '; touch /tmp/cli-pwned' /tmp/toolkit_test_cli_injection.err; then
+if [[ ! -e "$CLI_PWNED" ]] && [[ "$rc" -eq 127 ]] && grep -qF "; touch $CLI_PWNED" "${TEST_TMP_ROOT}/toolkit_test_cli_injection.err"; then
     ok "a shell-metacharacter payload as the command argument is never executed, only printed as inert text (rc=127)"
 else
-    bad "SECURITY: injection payload handling was wrong (rc=$rc, marker exists: $([[ -e /tmp/cli-pwned ]] && echo yes || echo no), stderr: $(cat /tmp/toolkit_test_cli_injection.err))"
+    bad "SECURITY: injection payload handling was wrong (rc=$rc, marker exists: $([[ -e "$CLI_PWNED" ]] && echo yes || echo no), stderr: $(cat "${TEST_TMP_ROOT}/toolkit_test_cli_injection.err"))"
 fi
-rm -f /tmp/cli-pwned
+rm -f "$CLI_PWNED"
 
 echo "== cli: command-substitution payload as the command argument is never executed =="
-rm -f /tmp/cli-pwned-subshell
-"${BIN_DIR}/server-toolkit" '$(touch /tmp/cli-pwned-subshell)' >/tmp/toolkit_test_cli_injection2.out 2>/tmp/toolkit_test_cli_injection2.err
+CLI_PWNED_SUBSHELL="${TEST_TMP_ROOT}/cli-pwned-subshell"
+rm -f "$CLI_PWNED_SUBSHELL"
+"${BIN_DIR}/server-toolkit" "\$(touch $CLI_PWNED_SUBSHELL)" >"${TEST_TMP_ROOT}/toolkit_test_cli_injection2.out" 2>"${TEST_TMP_ROOT}/toolkit_test_cli_injection2.err"
 rc=$?
-if [[ ! -e /tmp/cli-pwned-subshell ]] && [[ "$rc" -eq 127 ]]; then
+if [[ ! -e "$CLI_PWNED_SUBSHELL" ]] && [[ "$rc" -eq 127 ]]; then
     ok "a \$(...) payload as the command argument is never executed (rc=127)"
 else
-    bad "SECURITY: a \$(...) payload was not handled safely (rc=$rc, marker exists: $([[ -e /tmp/cli-pwned-subshell ]] && echo yes || echo no))"
+    bad "SECURITY: a \$(...) payload was not handled safely (rc=$rc, marker exists: $([[ -e "$CLI_PWNED_SUBSHELL" ]] && echo yes || echo no))"
 fi
-rm -f /tmp/cli-pwned-subshell
+rm -f "$CLI_PWNED_SUBSHELL"
 
 echo "== cli: a path-traversal-style command name is rejected, not resolved to a real file =="
-"${BIN_DIR}/server-toolkit" '../../etc/passwd' >/tmp/toolkit_test_cli_traversal.out 2>/tmp/toolkit_test_cli_traversal.err
+"${BIN_DIR}/server-toolkit" '../../etc/passwd' >"${TEST_TMP_ROOT}/toolkit_test_cli_traversal.out" 2>"${TEST_TMP_ROOT}/toolkit_test_cli_traversal.err"
 rc=$?
-[[ "$rc" -eq 127 ]] && grep -q 'unknown command' /tmp/toolkit_test_cli_traversal.err && ok "a path-traversal-style command name is treated as an unknown command, not resolved as a path (rc=127)" \
+[[ "$rc" -eq 127 ]] && grep -q 'unknown command' "${TEST_TMP_ROOT}/toolkit_test_cli_traversal.err" && ok "a path-traversal-style command name is treated as an unknown command, not resolved as a path (rc=127)" \
     || bad "a path-traversal-style command name was not rejected correctly (rc=$rc)"
 
 echo "== cli: no eval, no bash -c/sh -c on user input (static check) =="
@@ -4124,12 +4149,12 @@ fi
 
 echo "== cli: missing underlying command produces a clear error, not a raw exec failure =="
 rm -f "${CLI_TMP}/info"
-"${CLI_TMP}/server-toolkit" info >/tmp/toolkit_test_cli_missing.out 2>/tmp/toolkit_test_cli_missing.err
+"${CLI_TMP}/server-toolkit" info >"${TEST_TMP_ROOT}/toolkit_test_cli_missing.out" 2>"${TEST_TMP_ROOT}/toolkit_test_cli_missing.err"
 rc=$?
-if [[ "$rc" -eq 1 ]] && grep -q 'command not found or not executable' /tmp/toolkit_test_cli_missing.err; then
+if [[ "$rc" -eq 1 ]] && grep -q 'command not found or not executable' "${TEST_TMP_ROOT}/toolkit_test_cli_missing.err"; then
     ok "a missing underlying command produces a clear, controlled error (rc=1)"
 else
-    bad "a missing underlying command was not handled cleanly (rc=$rc, stderr: $(cat /tmp/toolkit_test_cli_missing.err))"
+    bad "a missing underlying command was not handled cleanly (rc=$rc, stderr: $(cat "${TEST_TMP_ROOT}/toolkit_test_cli_missing.err"))"
 fi
 rm -rf "$CLI_TMP"
 
@@ -4162,19 +4187,20 @@ else
 fi
 
 echo "== cli: modules command never executes a module's COMMAND (introspection-only canary) =="
-rm -f /tmp/cli-modules-pwned
+CLI_MODULES_PWNED="${TEST_TMP_ROOT}/cli-modules-pwned"
+rm -f "$CLI_MODULES_PWNED"
 mkdir -p "${CLI_TMP2}/canary/modules"
 printf 'CUSTOM_MODULES_ENABLED=true\n' > "${CLI_TMP2}/canary/config"
 chmod 600 "${CLI_TMP2}/canary/config"
-printf 'ENABLED=true\nCOMMAND=touch /tmp/cli-modules-pwned\n' > "${CLI_TMP2}/canary/modules/danger.conf"
+printf 'ENABLED=true\nCOMMAND=touch %s\n' "$CLI_MODULES_PWNED" > "${CLI_TMP2}/canary/modules/danger.conf"
 chmod 600 "${CLI_TMP2}/canary/modules/danger.conf"
 TOOLKIT_CONFIG_DIR="${CLI_TMP2}/canary" "${BIN_DIR}/server-toolkit" modules >/dev/null 2>&1
-if [[ ! -e /tmp/cli-modules-pwned ]]; then
+if [[ ! -e "$CLI_MODULES_PWNED" ]]; then
     ok "server-toolkit modules lists an enabled module without ever running its COMMAND"
 else
     bad "SECURITY: server-toolkit modules executed a module's COMMAND - it must only ever introspect"
 fi
-rm -f /tmp/cli-modules-pwned
+rm -f "$CLI_MODULES_PWNED"
 
 echo "== cli: config path =="
 result="$(TOOLKIT_CONFIG_DIR="${CLI_TMP2}/somewhere" "${BIN_DIR}/server-toolkit" config path)"
@@ -4204,10 +4230,10 @@ result="$(TOOLKIT_CONFIG_DIR="${CLI_TMP2}/unsafe" "${BIN_DIR}/server-toolkit" co
 chmod 600 "${CLI_TMP2}/unsafe/config"
 
 echo "== cli: config unknown subcommand =="
-"${BIN_DIR}/server-toolkit" config frobnicate >/tmp/toolkit_test_cli_config_unknown.out 2>/tmp/toolkit_test_cli_config_unknown.err
+"${BIN_DIR}/server-toolkit" config frobnicate >"${TEST_TMP_ROOT}/toolkit_test_cli_config_unknown.out" 2>"${TEST_TMP_ROOT}/toolkit_test_cli_config_unknown.err"
 rc=$?
-[[ "$rc" -ne 0 ]] && grep -q 'unknown config subcommand' /tmp/toolkit_test_cli_config_unknown.err && ok "server-toolkit config frobnicate fails cleanly with a clear message" \
-    || bad "server-toolkit config frobnicate did not fail cleanly (rc=$rc, stderr: $(cat /tmp/toolkit_test_cli_config_unknown.err))"
+[[ "$rc" -ne 0 ]] && grep -q 'unknown config subcommand' "${TEST_TMP_ROOT}/toolkit_test_cli_config_unknown.err" && ok "server-toolkit config frobnicate fails cleanly with a clear message" \
+    || bad "server-toolkit config frobnicate did not fail cleanly (rc=$rc, stderr: $(cat "${TEST_TMP_ROOT}/toolkit_test_cli_config_unknown.err"))"
 
 rm -rf "$CLI_TMP2"
 
@@ -4264,14 +4290,15 @@ for cli_bin in info gpu-info docker-info network-info storage-info services-info
 done
 
 echo "== cli: --help output is static text, never derived from or executing its own arguments =="
-rm -f /tmp/cli-help-pwned
-"${BIN_DIR}/server-toolkit" info '--help; touch /tmp/cli-help-pwned' >/tmp/toolkit_test_cli_help_inject.out 2>/tmp/toolkit_test_cli_help_inject.err
-if [[ ! -e /tmp/cli-help-pwned ]]; then
+CLI_HELP_PWNED="${TEST_TMP_ROOT}/cli-help-pwned"
+rm -f "$CLI_HELP_PWNED"
+"${BIN_DIR}/server-toolkit" info "--help; touch $CLI_HELP_PWNED" >"${TEST_TMP_ROOT}/toolkit_test_cli_help_inject.out" 2>"${TEST_TMP_ROOT}/toolkit_test_cli_help_inject.err"
+if [[ ! -e "$CLI_HELP_PWNED" ]]; then
     ok "a shell-metacharacter payload disguised as a --help-like argument is never executed"
 else
     bad "SECURITY: a payload passed alongside --help was executed"
 fi
-rm -f /tmp/cli-help-pwned
+rm -f "$CLI_HELP_PWNED"
 
 echo "== tui: command exists and is wired into the dispatcher =="
 if [[ -x "${BIN_DIR}/tui" ]]; then
@@ -4292,28 +4319,28 @@ else
 fi
 
 echo "== tui: non-TTY invocation is refused cleanly =="
-"${BIN_DIR}/tui" </dev/null >/tmp/toolkit_test_tui_notty.out 2>/tmp/toolkit_test_tui_notty.err
+"${BIN_DIR}/tui" </dev/null >"${TEST_TMP_ROOT}/toolkit_test_tui_notty.out" 2>"${TEST_TMP_ROOT}/toolkit_test_tui_notty.err"
 rc=$?
-if [[ "$rc" -eq 1 ]] && grep -q 'requires an interactive terminal' /tmp/toolkit_test_tui_notty.err; then
+if [[ "$rc" -eq 1 ]] && grep -q 'requires an interactive terminal' "${TEST_TMP_ROOT}/toolkit_test_tui_notty.err"; then
     ok "bin/tui refuses to start without a TTY, with a clear message and exit 1"
 else
-    bad "bin/tui did not refuse non-TTY invocation correctly (rc=$rc, stderr: $(cat /tmp/toolkit_test_tui_notty.err))"
+    bad "bin/tui did not refuse non-TTY invocation correctly (rc=$rc, stderr: $(cat "${TEST_TMP_ROOT}/toolkit_test_tui_notty.err"))"
 fi
-if ! grep -qiE 'traceback|line [0-9]+:.*unbound|syntax error' /tmp/toolkit_test_tui_notty.err; then
+if ! grep -qiE 'traceback|line [0-9]+:.*unbound|syntax error' "${TEST_TMP_ROOT}/toolkit_test_tui_notty.err"; then
     ok "bin/tui's non-TTY error contains no raw Bash internal error text"
 else
-    bad "bin/tui leaked a raw Bash internal error on non-TTY invocation: $(cat /tmp/toolkit_test_tui_notty.err)"
+    bad "bin/tui leaked a raw Bash internal error on non-TTY invocation: $(cat "${TEST_TMP_ROOT}/toolkit_test_tui_notty.err")"
 fi
 
 echo "== tui: TUI_ONCE mode renders one frame and exits 0 without touching terminal modes =="
-if result="$(TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null 2>/tmp/toolkit_test_tui_once.err)"; then
+if result="$(TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null 2>"${TEST_TMP_ROOT}/toolkit_test_tui_once.err")"; then
     if grep -q 'SERVER TOOLKIT' <<<"$result" && ! grep -q $'\033' <<<"$result"; then
         ok "TUI_ONCE=1 renders a frame, exits 0, and emits no escape-sequence bytes (genuinely no terminal-mode changes)"
     else
         bad "TUI_ONCE=1 output did not contain the expected header, or contained an escape byte (terminal-mode change)"
     fi
 else
-    bad "TUI_ONCE=1 exited non-zero: $(cat /tmp/toolkit_test_tui_once.err)"
+    bad "TUI_ONCE=1 exited non-zero: $(cat "${TEST_TMP_ROOT}/toolkit_test_tui_once.err")"
 fi
 
 echo "== tui: trap is registered before any terminal-mode change (line-order static check) =="
@@ -4398,18 +4425,18 @@ HANG_DIR="$(mktemp -d)"
 printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/docker"
 chmod +x "${HANG_DIR}/docker"
 start_ts=$(date +%s)
-PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/docker-info" >/tmp/toolkit_test_docker_hang.out 2>/tmp/toolkit_test_docker_hang.err
+PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/docker-info" >"${TEST_TMP_ROOT}/toolkit_test_docker_hang.out" 2>"${TEST_TMP_ROOT}/toolkit_test_docker_hang.err"
 hang_rc=$?
 elapsed=$(( $(date +%s) - start_ts ))
 if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
     ok "docker-info completes in ${elapsed}s despite a wedged 'docker' binary on PATH (bounded, not the full 60s hang)"
 else
-    bad "docker-info did not complete promptly with a wedged docker binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_docker_hang.err)"
+    bad "docker-info did not complete promptly with a wedged docker binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat "${TEST_TMP_ROOT}/toolkit_test_docker_hang.err")"
 fi
-if grep -A2 '^DOCKER$' /tmp/toolkit_test_docker_hang.out | grep -qE 'Daemon +unavailable'; then
+if grep -A2 '^DOCKER$' "${TEST_TMP_ROOT}/toolkit_test_docker_hang.out" | grep -qE 'Daemon +unavailable'; then
     ok "docker-info degrades to 'Daemon unavailable' gracefully rather than hanging or crashing when docker is wedged"
 else
-    bad "docker-info did not gracefully report Daemon unavailable for a wedged docker: $(cat /tmp/toolkit_test_docker_hang.out)"
+    bad "docker-info did not gracefully report Daemon unavailable for a wedged docker: $(cat "${TEST_TMP_ROOT}/toolkit_test_docker_hang.out")"
 fi
 rm -rf -- "$HANG_DIR"
 
@@ -4418,18 +4445,18 @@ HANG_DIR="$(mktemp -d)"
 printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/systemctl"
 chmod +x "${HANG_DIR}/systemctl"
 start_ts=$(date +%s)
-PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/services-info" >/tmp/toolkit_test_services_hang.out 2>/tmp/toolkit_test_services_hang.err
+PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/services-info" >"${TEST_TMP_ROOT}/toolkit_test_services_hang.out" 2>"${TEST_TMP_ROOT}/toolkit_test_services_hang.err"
 hang_rc=$?
 elapsed=$(( $(date +%s) - start_ts ))
 if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
     ok "services-info completes in ${elapsed}s despite a wedged 'systemctl' binary on PATH (bounded, not the full 60s hang)"
 else
-    bad "services-info did not complete promptly with a wedged systemctl binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_services_hang.err)"
+    bad "services-info did not complete promptly with a wedged systemctl binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat "${TEST_TMP_ROOT}/toolkit_test_services_hang.err")"
 fi
-if grep -A2 '^SERVICES$' /tmp/toolkit_test_services_hang.out | grep -qE 'Systemd +N/A'; then
+if grep -A2 '^SERVICES$' "${TEST_TMP_ROOT}/toolkit_test_services_hang.out" | grep -qE 'Systemd +N/A'; then
     ok "services-info degrades to 'Systemd N/A' gracefully rather than hanging or crashing when systemctl is wedged"
 else
-    bad "services-info did not gracefully report Systemd N/A for a wedged systemctl: $(cat /tmp/toolkit_test_services_hang.out)"
+    bad "services-info did not gracefully report Systemd N/A for a wedged systemctl: $(cat "${TEST_TMP_ROOT}/toolkit_test_services_hang.out")"
 fi
 rm -rf -- "$HANG_DIR"
 
@@ -4438,18 +4465,18 @@ HANG_DIR="$(mktemp -d)"
 printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/ufw"
 chmod +x "${HANG_DIR}/ufw"
 start_ts=$(date +%s)
-PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/security-info" >/tmp/toolkit_test_security_hang.out 2>/tmp/toolkit_test_security_hang.err
+PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/security-info" >"${TEST_TMP_ROOT}/toolkit_test_security_hang.out" 2>"${TEST_TMP_ROOT}/toolkit_test_security_hang.err"
 hang_rc=$?
 elapsed=$(( $(date +%s) - start_ts ))
 if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
     ok "security-info completes in ${elapsed}s despite a wedged 'ufw' binary on PATH (bounded, not the full 60s hang)"
 else
-    bad "security-info did not complete promptly with a wedged ufw binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_security_hang.err)"
+    bad "security-info did not complete promptly with a wedged ufw binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat "${TEST_TMP_ROOT}/toolkit_test_security_hang.err")"
 fi
-if grep -A2 '^UFW$' /tmp/toolkit_test_security_hang.out | grep -q 'N/A'; then
+if grep -A2 '^UFW$' "${TEST_TMP_ROOT}/toolkit_test_security_hang.out" | grep -q 'N/A'; then
     ok "security-info degrades UFW to N/A gracefully rather than hanging or crashing when ufw is wedged"
 else
-    bad "security-info did not gracefully report UFW as N/A for a wedged ufw: $(cat /tmp/toolkit_test_security_hang.out)"
+    bad "security-info did not gracefully report UFW as N/A for a wedged ufw: $(cat "${TEST_TMP_ROOT}/toolkit_test_security_hang.out")"
 fi
 rm -rf -- "$HANG_DIR"
 
@@ -4458,18 +4485,18 @@ HANG_DIR="$(mktemp -d)"
 printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/nvidia-smi"
 chmod +x "${HANG_DIR}/nvidia-smi"
 start_ts=$(date +%s)
-PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/gpu-info" >/tmp/toolkit_test_gpu_hang.out 2>/tmp/toolkit_test_gpu_hang.err
+PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/gpu-info" >"${TEST_TMP_ROOT}/toolkit_test_gpu_hang.out" 2>"${TEST_TMP_ROOT}/toolkit_test_gpu_hang.err"
 hang_rc=$?
 elapsed=$(( $(date +%s) - start_ts ))
 if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
     ok "gpu-info completes in ${elapsed}s despite a wedged 'nvidia-smi' binary on PATH (bounded, not the full 60s hang)"
 else
-    bad "gpu-info did not complete promptly with a wedged nvidia-smi binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_gpu_hang.err)"
+    bad "gpu-info did not complete promptly with a wedged nvidia-smi binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat "${TEST_TMP_ROOT}/toolkit_test_gpu_hang.err")"
 fi
-if grep -q '^GPU: N/A$' /tmp/toolkit_test_gpu_hang.out; then
+if grep -q '^GPU: N/A$' "${TEST_TMP_ROOT}/toolkit_test_gpu_hang.out"; then
     ok "gpu-info degrades to 'GPU: N/A' gracefully rather than hanging or crashing when nvidia-smi is wedged"
 else
-    bad "gpu-info did not gracefully report GPU: N/A for a wedged nvidia-smi: $(cat /tmp/toolkit_test_gpu_hang.out)"
+    bad "gpu-info did not gracefully report GPU: N/A for a wedged nvidia-smi: $(cat "${TEST_TMP_ROOT}/toolkit_test_gpu_hang.out")"
 fi
 rm -rf -- "$HANG_DIR"
 
@@ -4478,18 +4505,18 @@ HANG_DIR="$(mktemp -d)"
 printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/ss"
 chmod +x "${HANG_DIR}/ss"
 start_ts=$(date +%s)
-PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/network-info" >/tmp/toolkit_test_network_hang.out 2>/tmp/toolkit_test_network_hang.err
+PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/network-info" >"${TEST_TMP_ROOT}/toolkit_test_network_hang.out" 2>"${TEST_TMP_ROOT}/toolkit_test_network_hang.err"
 hang_rc=$?
 elapsed=$(( $(date +%s) - start_ts ))
 if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
     ok "network-info completes in ${elapsed}s despite a wedged 'ss' binary on PATH (bounded, not the full 60s hang)"
 else
-    bad "network-info did not complete promptly with a wedged ss binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_network_hang.err)"
+    bad "network-info did not complete promptly with a wedged ss binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat "${TEST_TMP_ROOT}/toolkit_test_network_hang.err")"
 fi
-if grep -A2 '^LISTENING PORTS$' /tmp/toolkit_test_network_hang.out | grep -q 'None'; then
+if grep -A2 '^LISTENING PORTS$' "${TEST_TMP_ROOT}/toolkit_test_network_hang.out" | grep -q 'None'; then
     ok "network-info degrades LISTENING PORTS to 'None' gracefully rather than hanging or crashing when ss is wedged"
 else
-    bad "network-info did not gracefully report 'None' for LISTENING PORTS with a wedged ss: $(cat /tmp/toolkit_test_network_hang.out)"
+    bad "network-info did not gracefully report 'None' for LISTENING PORTS with a wedged ss: $(cat "${TEST_TMP_ROOT}/toolkit_test_network_hang.out")"
 fi
 rm -rf -- "$HANG_DIR"
 
@@ -4504,22 +4531,22 @@ HANG_DIR="$(mktemp -d)"
 printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/docker"
 chmod +x "${HANG_DIR}/docker"
 start_ts=$(date +%s)
-PATH="${HANG_DIR}:${PATH}" TUI_ONCE=1 timeout 20 "${BIN_DIR}/tui" </dev/null >/tmp/toolkit_test_tui_docker_hang.out 2>/tmp/toolkit_test_tui_docker_hang.err
+PATH="${HANG_DIR}:${PATH}" TUI_ONCE=1 timeout 20 "${BIN_DIR}/tui" </dev/null >"${TEST_TMP_ROOT}/toolkit_test_tui_docker_hang.out" 2>"${TEST_TMP_ROOT}/toolkit_test_tui_docker_hang.err"
 hang_rc=$?
 elapsed=$(( $(date +%s) - start_ts ))
 if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
     ok "TUI_ONCE=1 bin/tui completes in ${elapsed}s despite a wedged 'docker' binary on PATH (bounded, not the full 60s hang)"
 else
-    bad "TUI_ONCE=1 bin/tui did not complete promptly with a wedged docker binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_tui_docker_hang.err)"
+    bad "TUI_ONCE=1 bin/tui did not complete promptly with a wedged docker binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat "${TEST_TMP_ROOT}/toolkit_test_tui_docker_hang.err")"
 fi
 # Full-width TUI_ONCE output renders DOCKER/GPU as a two-column block
 # (tui_two_col), so a DOCKER-panel line is followed by " | " and GPU
 # content on the SAME physical line - not matchable with an anchored
 # '^DOCKER$'. Scope the check to the DOCKER block's own lines instead.
-if grep -A2 'DOCKER' /tmp/toolkit_test_tui_docker_hang.out | grep -q 'unavailable'; then
+if grep -A2 'DOCKER' "${TEST_TMP_ROOT}/toolkit_test_tui_docker_hang.out" | grep -q 'unavailable'; then
     ok "tui DOCKER panel degrades to 'unavailable' gracefully rather than hanging or crashing when docker is wedged"
 else
-    bad "tui DOCKER panel did not gracefully report unavailable for a wedged docker: $(cat /tmp/toolkit_test_tui_docker_hang.out)"
+    bad "tui DOCKER panel did not gracefully report unavailable for a wedged docker: $(cat "${TEST_TMP_ROOT}/toolkit_test_tui_docker_hang.out")"
 fi
 rm -rf -- "$HANG_DIR"
 
@@ -4533,20 +4560,20 @@ HANG_DIR="$(mktemp -d)"
 printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/ufw"
 chmod +x "${HANG_DIR}/ufw"
 start_ts=$(date +%s)
-PATH="${HANG_DIR}:${PATH}" TUI_ONCE=1 timeout 20 "${BIN_DIR}/tui" </dev/null >/tmp/toolkit_test_tui_ufw_hang.out 2>/tmp/toolkit_test_tui_ufw_hang.err
+PATH="${HANG_DIR}:${PATH}" TUI_ONCE=1 timeout 20 "${BIN_DIR}/tui" </dev/null >"${TEST_TMP_ROOT}/toolkit_test_tui_ufw_hang.out" 2>"${TEST_TMP_ROOT}/toolkit_test_tui_ufw_hang.err"
 hang_rc=$?
 elapsed=$(( $(date +%s) - start_ts ))
 if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
     ok "TUI_ONCE=1 bin/tui completes in ${elapsed}s despite a wedged 'ufw' binary on PATH (bounded, not the full 60s hang)"
 else
-    bad "TUI_ONCE=1 bin/tui did not complete promptly with a wedged ufw binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_tui_ufw_hang.err)"
+    bad "TUI_ONCE=1 bin/tui did not complete promptly with a wedged ufw binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat "${TEST_TMP_ROOT}/toolkit_test_tui_ufw_hang.err")"
 fi
 # Same two-column caveat as the DOCKER test above - scope to the
 # SECURITY block's own lines rather than anchoring to a full line.
-if grep -A2 'SECURITY' /tmp/toolkit_test_tui_ufw_hang.out | grep -qE 'UFW +N/A'; then
+if grep -A2 'SECURITY' "${TEST_TMP_ROOT}/toolkit_test_tui_ufw_hang.out" | grep -qE 'UFW +N/A'; then
     ok "tui SECURITY panel degrades UFW to N/A gracefully rather than hanging or crashing when ufw is wedged"
 else
-    bad "tui SECURITY panel did not gracefully report UFW N/A for a wedged ufw: $(cat /tmp/toolkit_test_tui_ufw_hang.out)"
+    bad "tui SECURITY panel did not gracefully report UFW N/A for a wedged ufw: $(cat "${TEST_TMP_ROOT}/toolkit_test_tui_ufw_hang.out")"
 fi
 rm -rf -- "$HANG_DIR"
 
@@ -4588,21 +4615,21 @@ HANG_DIR="$(mktemp -d)"
 printf '#!/usr/bin/env bash\nsleep 60\n' >"${HANG_DIR}/docker"
 chmod +x "${HANG_DIR}/docker"
 start_ts=$(date +%s)
-PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/info" >/tmp/toolkit_test_info_docker_hang.out 2>/tmp/toolkit_test_info_docker_hang.err
+PATH="${HANG_DIR}:${PATH}" timeout 20 "${BIN_DIR}/info" >"${TEST_TMP_ROOT}/toolkit_test_info_docker_hang.out" 2>"${TEST_TMP_ROOT}/toolkit_test_info_docker_hang.err"
 hang_rc=$?
 elapsed=$(( $(date +%s) - start_ts ))
 if [[ "$hang_rc" -eq 0 ]] && [[ "$elapsed" -lt 15 ]]; then
     ok "info completes in ${elapsed}s despite a wedged 'docker' binary on PATH (bounded, not the full 60s hang)"
 else
-    bad "info did not complete promptly with a wedged docker binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat /tmp/toolkit_test_info_docker_hang.err)"
+    bad "info did not complete promptly with a wedged docker binary (rc=$hang_rc, elapsed=${elapsed}s): $(cat "${TEST_TMP_ROOT}/toolkit_test_info_docker_hang.err")"
 fi
 # bin/info's print_header emits a title line then a separate rule line
 # before the section's own content, so the content is 2 lines after the
 # header, not 1.
-if grep -A2 '^DOCKER$' /tmp/toolkit_test_info_docker_hang.out | grep -q 'unavailable'; then
+if grep -A2 '^DOCKER$' "${TEST_TMP_ROOT}/toolkit_test_info_docker_hang.out" | grep -q 'unavailable'; then
     ok "info DOCKER section degrades to 'unavailable' gracefully rather than hanging or crashing when docker is wedged"
 else
-    bad "info DOCKER section did not gracefully report unavailable for a wedged docker: $(cat /tmp/toolkit_test_info_docker_hang.out)"
+    bad "info DOCKER section did not gracefully report unavailable for a wedged docker: $(cat "${TEST_TMP_ROOT}/toolkit_test_info_docker_hang.out")"
 fi
 rm -rf -- "$HANG_DIR"
 
@@ -4810,21 +4837,22 @@ else
 fi
 
 echo "== tui: keyboard input injection payload is never executed (canary) =="
-rm -f /tmp/tui-pwned
+TUI_PWNED="${TEST_TMP_ROOT}/tui-pwned"
+rm -f "$TUI_PWNED"
 result="$(bash -c '
     source "'"${LIB_DIR}"'/common.sh"
     source "'"${LIB_DIR}"'/status.sh"
     source "'"${LIB_DIR}"'/config.sh"
     source "'"${LIB_DIR}"'/modules.sh"
     source "'"${BIN_DIR}"'/tui"
-    tui_key_action "$(printf "; touch /tmp/tui-pwned")"
+    tui_key_action "$(printf "; touch '"${TUI_PWNED}"'")"
 ')"
-if [[ ! -e /tmp/tui-pwned ]] && [[ "$result" == "ignore" ]]; then
+if [[ ! -e "$TUI_PWNED" ]] && [[ "$result" == "ignore" ]]; then
     ok "a shell-metacharacter payload as a keypress is never executed, only matched against the fixed whitelist (mapped to 'ignore')"
 else
-    bad "SECURITY: an injection payload as a keypress was not handled safely (marker exists: $([[ -e /tmp/tui-pwned ]] && echo yes || echo no), result: '$result')"
+    bad "SECURITY: an injection payload as a keypress was not handled safely (marker exists: $([[ -e "$TUI_PWNED" ]] && echo yes || echo no), result: '$result')"
 fi
-rm -f /tmp/tui-pwned
+rm -f "$TUI_PWNED"
 
 result="$(bash -c '
     source "'"${LIB_DIR}"'/common.sh"
@@ -4840,21 +4868,22 @@ else
     bad "SECURITY: a glob-metacharacter key was not handled safely (result: '$result')"
 fi
 
-rm -f /tmp/tui-pwned2
+TUI_PWNED2="${TEST_TMP_ROOT}/tui-pwned2"
+rm -f "$TUI_PWNED2"
 result="$(bash -c '
     source "'"${LIB_DIR}"'/common.sh"
     source "'"${LIB_DIR}"'/status.sh"
     source "'"${LIB_DIR}"'/config.sh"
     source "'"${LIB_DIR}"'/modules.sh"
     source "'"${BIN_DIR}"'/tui"
-    tui_key_action "$(printf "\$(touch /tmp/tui-pwned2)")"
+    tui_key_action "$(printf "\$(touch '"${TUI_PWNED2}"')")"
 ')"
-if [[ ! -e /tmp/tui-pwned2 ]] && [[ "$result" == "ignore" ]]; then
+if [[ ! -e "$TUI_PWNED2" ]] && [[ "$result" == "ignore" ]]; then
     ok "a \$(...) command-substitution payload as a keypress is never executed, only matched against the fixed whitelist (mapped to 'ignore')"
 else
-    bad "SECURITY: a \$(...) injection payload as a keypress was not handled safely (marker exists: $([[ -e /tmp/tui-pwned2 ]] && echo yes || echo no), result: '$result')"
+    bad "SECURITY: a \$(...) injection payload as a keypress was not handled safely (marker exists: $([[ -e "$TUI_PWNED2" ]] && echo yes || echo no), result: '$result')"
 fi
-rm -f /tmp/tui-pwned2
+rm -f "$TUI_PWNED2"
 
 echo "== tui: overview renders real diagnostic data (TUI_ONCE) =="
 result="$(TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null)"
@@ -4962,32 +4991,34 @@ fi
 
 echo "== tui: custom module disabled globally -> never executed =="
 TUI_TMP2="$(mktemp -d)"
-rm -f /tmp/tui-module-pwned-global-off
+TUI_MODULE_PWNED_GLOBAL_OFF="${TEST_TMP_ROOT}/tui-module-pwned-global-off"
+rm -f "$TUI_MODULE_PWNED_GLOBAL_OFF"
 mkdir -p "${TUI_TMP2}/globaloff/modules"
-printf 'ENABLED=true\nCOMMAND=touch /tmp/tui-module-pwned-global-off\n' > "${TUI_TMP2}/globaloff/modules/danger.conf"
+printf 'ENABLED=true\nCOMMAND=touch %s\n' "$TUI_MODULE_PWNED_GLOBAL_OFF" > "${TUI_TMP2}/globaloff/modules/danger.conf"
 chmod 600 "${TUI_TMP2}/globaloff/modules/danger.conf"
 TOOLKIT_CONFIG_DIR="${TUI_TMP2}/globaloff" TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null >/dev/null 2>&1
-if [[ ! -e /tmp/tui-module-pwned-global-off ]]; then
+if [[ ! -e "$TUI_MODULE_PWNED_GLOBAL_OFF" ]]; then
     ok "tui never runs a module's COMMAND when CUSTOM_MODULES_ENABLED is unset (global gate)"
 else
     bad "SECURITY: tui ran a module's COMMAND with the global gate off"
 fi
-rm -f /tmp/tui-module-pwned-global-off
+rm -f "$TUI_MODULE_PWNED_GLOBAL_OFF"
 
 echo "== tui: custom module disabled per-module -> never executed even with the global gate on =="
-rm -f /tmp/tui-module-pwned-per-off
+TUI_MODULE_PWNED_PER_OFF="${TEST_TMP_ROOT}/tui-module-pwned-per-off"
+rm -f "$TUI_MODULE_PWNED_PER_OFF"
 mkdir -p "${TUI_TMP2}/peroff/modules"
 printf 'CUSTOM_MODULES_ENABLED=true\n' > "${TUI_TMP2}/peroff/config"
 chmod 600 "${TUI_TMP2}/peroff/config"
-printf 'ENABLED=false\nCOMMAND=touch /tmp/tui-module-pwned-per-off\n' > "${TUI_TMP2}/peroff/modules/danger.conf"
+printf 'ENABLED=false\nCOMMAND=touch %s\n' "$TUI_MODULE_PWNED_PER_OFF" > "${TUI_TMP2}/peroff/modules/danger.conf"
 chmod 600 "${TUI_TMP2}/peroff/modules/danger.conf"
 TOOLKIT_CONFIG_DIR="${TUI_TMP2}/peroff" TUI_ONCE=1 "${BIN_DIR}/tui" </dev/null >/dev/null 2>&1
-if [[ ! -e /tmp/tui-module-pwned-per-off ]]; then
+if [[ ! -e "$TUI_MODULE_PWNED_PER_OFF" ]]; then
     ok "tui never runs a module's COMMAND when that module's own ENABLED=false, even with the global gate on"
 else
     bad "SECURITY: tui ran a disabled module's COMMAND"
 fi
-rm -f /tmp/tui-module-pwned-per-off
+rm -f "$TUI_MODULE_PWNED_PER_OFF"
 
 echo "== tui: an enabled module (both gates on) runs and surfaces as an alert =="
 mkdir -p "${TUI_TMP2}/enabled/modules"
