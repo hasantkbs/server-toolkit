@@ -33,11 +33,30 @@ Kullanıcı bir terminal oturumunda **"terminal"** dediğinde, bu projeden
 tests/test.sh: 526/526, tests/test-install.sh: 37/37. Tüm komutlar
 read-only, destructive command yok, server-specific hardcoding yok.
 
-Bilinen durum (abartısız): git geçmişinde (yaklaşık son commit'ten önceki
-~50 commit) gerçek kullanıcı adı/home path hâlâ recoverable — bu bilinçli
-olarak bu fazda rewrite edilmedi (history rewrite = ayrı, deferred karar;
-gerekirse `git filter-repo` ile ilk public push'tan önce, remote henüz
-yokken). `tests/test.sh`'daki tüm sabit (predictable) `/tmp/...` yolları
+Bilinen durum (abartısız): git geçmişinin sanitize edilmesi bu release
+candidate klonunda (bu repo, orijinal geliştirme reposunun ayrı bir
+klonu) tamamlandı — `git filter-repo` ile 54 reachable commit'in tamamından
+gerçek kullanıcı adı/home path ve iki internal kod adı temizlendi
+(orijinaldeki 59 commit'ten 5'i, `docs/superpowers/` kaldırılınca boşalıp
+otomatik prune edildi). Bağımsız bir adversarial review bu sanitizasyonu
+denetledi: 54 commit'in tamamındaki 138 unique blob'un exhaustive taraması
+yapıldı, gerçek kullanıcı adı/home path veya iki kod adına dair sıfır
+residual eşleşme bulundu; bu klonun mevcut tree'sinin orijinal reponun
+tip'iyle tree-hash düzeyinde birebir aynı olduğu da doğrulandı. Review
+sonucu "PASS WITH FOLLOW-UPS" — tek bulgu bu paragrafın kendisindeki
+(sanitizasyonun hâlâ deferred/eksik olduğunu söyleyen) stale ifadeydi,
+şu an düzeltiliyor.
+
+Orijinal geliştirme reposu bu işlemden etkilenmedi:
+değişmeden duruyor, orijinal/unsanitized geçmişini (gerçek kullanıcı
+adı/home path dahil) hâlâ içeriyor. Bu klon ayrı bir artifact — orijinal
+reponun rewrite'ı değil.
+
+Bu sanitize edilmiş klon public release adayı olarak düşünülüyor, ama
+henüz publish edilmedi: GitHub remote eklenmedi, push yapılmadı. Publish,
+final insan review'u ve açık onayı bekliyor.
+
+`tests/test.sh`'daki tüm sabit (predictable) `/tmp/...` yolları
 `TEST_TMP_ROOT` altına taşındı; kalan ~60 `mktemp -d` çağrısı zaten
 argümansız (rastgele, öngörülemez isim) olduğu için ek risk taşımıyor,
 migrate edilmedi.
@@ -62,6 +81,6 @@ migrate edilmedi.
 
 - Plugin sistemi
 - Proje adı değişikliği
-- Git geçmişinin sanitize edilmesi (deferred karar — bkz. yukarıdaki "Bilinen durum")
+- Bu sanitize edilmiş klonun public'e publish edilmesi (GitHub remote eklenmesi + push — final insan review/onayı bekliyor, bkz. yukarıdaki "Bilinen durum")
 
 Bunlar diagnostic modüller tamamlandıktan sonra ayrı sprint'lerde ele alınacak.
